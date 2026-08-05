@@ -1,0 +1,42 @@
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+from typing import Annotated
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Settings loaded once when the application process starts."""
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    archive_accounts: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    twscrape_session_path: Path = Path("/data/twscrape")
+    archive_db_path: Path
+    archive_data_dir: Path
+    archive_initial_lookback_days: int = Field(default=30, ge=1)
+    archive_sync_interval_seconds: int = Field(default=21600, ge=60)
+    archive_timezone: str = "Asia/Shanghai"
+    archive_media_enabled: bool = True
+    archive_media_max_bytes: int = Field(default=0, ge=0)
+    web_host: str = "0.0.0.0"
+    web_port: int = Field(default=8000, ge=1, le=65535)
+    web_auth_token: str = Field(min_length=1)
+    log_level: str = "INFO"
+
+    @field_validator("archive_accounts", mode="before")
+    @classmethod
+    def split_accounts(cls, value: str | list[str] | None) -> list[str]:
+        if value is None or value == "":
+            return []
+        if isinstance(value, list):
+            return value
+        return [account.strip().lstrip("@") for account in value.split(",") if account.strip()]
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
