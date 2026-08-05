@@ -17,7 +17,8 @@ class Settings(BaseSettings):
     twscrape_session_path: Path = Path("/data/twscrape")
     archive_db_path: Path
     archive_data_dir: Path
-    archive_initial_lookback_days: int = Field(default=30, ge=1)
+    archive_initial_post_limit: int = Field(default=-1, ge=-1)
+    archive_incremental_known_post_limit: int = 20
     archive_sync_interval_seconds: int = Field(default=21600, ge=60)
     archive_timezone: str = "Asia/Shanghai"
     archive_media_enabled: bool = True
@@ -35,6 +36,13 @@ class Settings(BaseSettings):
         if isinstance(value, list):
             return value
         return [account.strip().lstrip("@") for account in value.split(",") if account.strip()]
+
+    @field_validator("archive_incremental_known_post_limit")
+    @classmethod
+    def validate_known_post_limit(cls, value: int) -> int:
+        if value == 0 or value < -1:
+            raise ValueError("must be -1 or a positive integer")
+        return value
 
 
 @lru_cache

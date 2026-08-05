@@ -36,7 +36,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             service = ArchiveSyncService(
                 ArchiveRepository(app_settings.archive_db_path, app_settings.archive_data_dir),
                 source,
-                app_settings.archive_initial_lookback_days,
+                app_settings.archive_initial_post_limit,
+                app_settings.archive_incremental_known_post_limit,
             )
             sync_task = asyncio.create_task(
                 _sync_loop(service, app_settings.archive_accounts,

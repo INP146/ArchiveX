@@ -161,7 +161,7 @@ sync_runs
 
 ### 6.2 首次同步
 
-1. 对每个账号读取最近 `ARCHIVE_INITIAL_LOOKBACK_DAYS` 天的内容。
+1. 对每个账号读取最多 `ARCHIVE_INITIAL_POST_LIMIT` 条内容；设为 `-1` 时不限制。
 2. 将原始响应写入 `post.json`，标准字段写入 SQLite。
 3. 对帖子媒体创建下载记录。
 4. 调用 `gallery-dl` 下载媒体，并记录路径、哈希和错误。
@@ -170,7 +170,7 @@ sync_runs
 ### 6.3 增量同步
 
 1. 后台循环按 `ARCHIVE_SYNC_INTERVAL_SECONDS` 触发一次。
-2. 每个账号只读取上次同步之后的新内容；没有可靠游标时，允许重复读取并依靠 `tweet_id` 去重。
+2. 每个账号从最新内容开始读取，连续遇到 `ARCHIVE_INCREMENTAL_KNOWN_POST_LIMIT` 条已归档帖子后停止；发现新帖时重新计数，设为 `-1` 时不提前停止。
 3. 新帖子先落库，再异步于当前进程中下载媒体。
 4. 单条帖子失败不影响同一批次的其他帖子；批次错误写入 `sync_runs` 和 `accounts.last_error`。
 5. 下一轮继续重试失败媒体和未完成帖子。

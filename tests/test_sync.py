@@ -31,11 +31,12 @@ def _post(tweet_id: str, date: datetime, text: str = "post") -> SourcePost:
                       f"https://x.com/first/status/{tweet_id}", {"id": tweet_id})
 
 
-def _service(tmp_path, source):
+def _service(tmp_path, source, initial_post_limit=1, incremental_known_post_limit=1):
     database_path = tmp_path / "archive.sqlite3"
     archive_path = tmp_path / "archive"
     initialize_storage(database_path, archive_path, tmp_path / "sessions")
-    return ArchiveSyncService(ArchiveRepository(database_path, archive_path), source, 30,
+    return ArchiveSyncService(ArchiveRepository(database_path, archive_path), source,
+                              initial_post_limit, incremental_known_post_limit,
                               now=lambda: datetime(2026, 8, 5, tzinfo=UTC))
 
 
@@ -65,3 +66,40 @@ def test_account_failures_do_not_stop_later_accounts(tmp_path) -> None:
 
     assert [result.status for result in results] == ["error", "success"]
     assert results[1].posts_new == 1
+
+
+def test_unlimited_initial_sync_imports_all_posts(tmp_path) -> None:
+    account = SourceAccount("1", "first", "First")
+    source = FakeSource({"first": account}, {"1": [
+        _post("2", datetime(2026, 8, 5, tzinfo=UTC)),
+        _post("1", datetime(2020, 1, 1, tzinfo=UTC)),
+    ]})
+    service = _service(tmp_path, source, initial_post_limit=-1)
+
+    result = asyncio.run(service.sync_account("first"))
+
+    assert (result.status, result.posts_seen, result.posts_new) == ("success", 2, 2)
+
+
+def test_incremental_sync_stops_after_configured_consecutive_known_posts(tmp_path) -> None:
+    account = SourceAccount("1", "first", "First")
+    source = FakeSource({"first": account}, {"1": [
+        _post("3", datetime(2026, 8, 3, tzinfo=UTC)),
+        _post("2", datetime(2026, 8, 2, tzinfo=UTC)),
+        _post("1", datetime(2026, 8, 1, tzinfo=UTC)),
+    ]})
+    service = _service(tmp_path, source, initial_post_limit=-1,
+                       incremental_known_post_limit=2)
+    asyncio.run(service.sync_account("first"))
+    source.posts["1"] = [
+        _post("4", datetime(2026, 8, 4, tzinfo=UTC)),
+        _post("3", datetime(2026, 8, 3, tzinfo=UTC)),
+        _post("5", datetime(2026, 8, 2, 12, tzinfo=UTC)),
+        _post("2", datetime(2026, 8, 2, tzinfo=UTC)),
+        _post("1", datetime(2026, 8, 1, tzinfo=UTC)),
+        _post("0", datetime(2026, 7, 31, tzinfo=UTC)),
+    ]
+
+    result = asyncio.run(service.sync_account("first"))
+
+    assert (result.posts_seen, result.posts_new) == (5, 2)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from archivex.source import PostSource
 from archivex.storage import ArchiveRepository, PostInput
@@ -23,11 +23,13 @@ class AccountSyncResult:
 class ArchiveSyncService:
     """Runs account synchronizations sequentially and makes replay safe via SQLite upserts."""
 
-    def __init__(self, repository: ArchiveRepository, source: PostSource, initial_lookback_days: int,
+    def __init__(self, repository: ArchiveRepository, source: PostSource, initial_post_limit: int,
+                 incremental_known_post_limit: int,
                  now: Callable[[], datetime] | None = None) -> None:
         self.repository = repository
         self.source = source
-        self.initial_lookback_days = initial_lookback_days
+        self.initial_post_limit = initial_post_limit
+        self.incremental_known_post_limit = incremental_known_post_limit
         self.now = now or (lambda: datetime.now(UTC))
 
     async def sync_accounts(self, usernames: Iterable[str]) -> list[AccountSyncResult]:
@@ -52,13 +54,14 @@ class ArchiveSyncService:
         run_id = self.repository.start_sync_run(account.id)
         posts_seen = 0
         posts_new = 0
-        cutoff = _sync_cutoff(account.last_sync_at, self.initial_lookback_days, self.now())
+        is_initial_sync = account.last_sync_at is None
+        consecutive_known_posts = 0
         try:
             async for post in self.source.fetch_timeline(account.x_user_id):
-                if post.posted_at.astimezone(UTC) < cutoff:
+                if is_initial_sync and 0 <= self.initial_post_limit <= posts_seen:
                     break
                 posts_seen += 1
-                if self.repository.upsert_post(
+                is_new = self.repository.upsert_post(
                     PostInput(
                         tweet_id=post.tweet_id,
                         account_id=account.id,
@@ -69,8 +72,17 @@ class ArchiveSyncService:
                         permalink=post.permalink,
                         raw_payload=post.raw_payload,
                     )
-                ):
+                )
+                if is_new:
                     posts_new += 1
+                    consecutive_known_posts = 0
+                elif not is_initial_sync:
+                    consecutive_known_posts += 1
+                    if (
+                        self.incremental_known_post_limit != -1
+                        and consecutive_known_posts >= self.incremental_known_post_limit
+                    ):
+                        break
         except Exception as exc:
             message = str(exc) or exc.__class__.__name__
             self.repository.finish_sync_run(
@@ -89,9 +101,3 @@ class ArchiveSyncService:
         self.repository.mark_account_sync_success(account.id, completed_at)
         return AccountSyncResult(username=source_account.username, status="success",
                                  posts_seen=posts_seen, posts_new=posts_new)
-
-
-def _sync_cutoff(last_sync_at: str | None, initial_lookback_days: int, now: datetime) -> datetime:
-    if last_sync_at:
-        return datetime.fromisoformat(last_sync_at).astimezone(UTC)
-    return now.astimezone(UTC) - timedelta(days=initial_lookback_days)
