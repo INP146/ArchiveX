@@ -2,7 +2,8 @@
 
 ArchiveX is a self-hosted, read-only archive for selected X accounts. The current
 foundation provides configuration validation, persistent local storage setup, and
-a health endpoint. Crawling and media downloading will be added in later steps.
+a health endpoint. It uses `twscrape` to archive posts; media downloading will
+be added in a later step.
 
 ## Run with Docker
 
@@ -21,7 +22,14 @@ directory when recreating the container.
 
 All settings are documented in `.env.example`. `WEB_AUTH_TOKEN`,
 `ARCHIVE_DB_PATH`, and `ARCHIVE_DATA_DIR` are required. `ARCHIVE_ACCOUNTS` may
-be empty until crawling is configured.
+be empty to run the web service without crawling.
+
+When accounts are configured, the application starts one sequential sync loop:
+it imports the configured history on the first run and then checks for updates
+at `ARCHIVE_SYNC_INTERVAL_SECONDS`. `TWSCRAPE_SESSION_PATH` is either a
+twscrape account database file or a directory containing `accounts.db`. Its
+accounts and login state must be provisioned before ArchiveX starts; credentials
+are not accepted by the web service or stored in this repository.
 
 ## Tests
 
@@ -31,4 +39,3 @@ Use Python 3.11 or newer:
 python -m pip install -e '.[dev]'
 pytest
 ```
-

@@ -74,6 +74,8 @@ class Account:
     username: str
     display_name: str | None
     status: str
+    last_sync_at: str | None
+    last_error: str | None
 
 
 @dataclass(frozen=True)
@@ -103,7 +105,8 @@ def initialize_storage(database_path: Path, archive_data_dir: Path, session_path
     """Create persistent locations and apply the initial SQLite schema."""
     database_path.parent.mkdir(parents=True, exist_ok=True)
     archive_data_dir.mkdir(parents=True, exist_ok=True)
-    session_path.mkdir(parents=True, exist_ok=True)
+    session_directory = session_path.parent if session_path.suffix else session_path
+    session_directory.mkdir(parents=True, exist_ok=True)
     with _connect(database_path) as connection:
         connection.executescript(SCHEMA)
 
@@ -126,10 +129,36 @@ class ArchiveRepository:
                 (x_user_id, username, display_name, status, now, now),
             )
             row = connection.execute(
-                "SELECT id, x_user_id, username, display_name, status FROM accounts WHERE x_user_id = ?",
+                """SELECT id, x_user_id, username, display_name, status, last_sync_at, last_error
+                FROM accounts WHERE x_user_id = ?""",
                 (x_user_id,),
             ).fetchone()
         return Account(**dict(row))
+
+    def get_account(self, x_user_id: str) -> Account | None:
+        with _connect(self.database_path) as connection:
+            row = connection.execute(
+                """SELECT id, x_user_id, username, display_name, status, last_sync_at, last_error
+                FROM accounts WHERE x_user_id = ?""",
+                (x_user_id,),
+            ).fetchone()
+        return Account(**dict(row)) if row else None
+
+    def mark_account_sync_success(self, account_id: int, completed_at: datetime) -> None:
+        timestamp = _timestamp(completed_at)
+        with _connect(self.database_path) as connection:
+            connection.execute(
+                """UPDATE accounts SET status = 'active', last_sync_at = ?, last_error = NULL,
+                updated_at = ? WHERE id = ?""",
+                (timestamp, timestamp, account_id),
+            )
+
+    def mark_account_sync_error(self, account_id: int, error: str) -> None:
+        with _connect(self.database_path) as connection:
+            connection.execute(
+                "UPDATE accounts SET status = 'error', last_error = ?, updated_at = ? WHERE id = ?",
+                (error, _timestamp(), account_id),
+            )
 
     def upsert_post(self, post: PostInput) -> bool:
         """Persist a post and its raw payload. Returns True only for a new tweet ID."""
