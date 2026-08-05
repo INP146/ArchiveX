@@ -42,6 +42,21 @@ exposes archived accounts (`GET /api/accounts`), posts (`GET /api/posts` and
 history (`GET /api/sync-runs`). Post lists support `account_id`, `q`, `from`,
 `to`, `has_media`, `limit`, and `offset` query parameters.
 
+## Web frontend
+
+The React frontend lives in `frontend/`. It uses Vite, TypeScript, TanStack
+Router, TanStack Query, and Tailwind CSS. Start the API, then run:
+
+```sh
+cd frontend
+npm install
+npm run dev
+```
+
+Vite proxies `/api` and `/health` to the port in the repository `.env` file.
+Set `VITE_API_PROXY_TARGET` to override it. `npm run generate:api` can regenerate
+TypeScript types from the FastAPI OpenAPI document when the API changes.
+
 ## X Session Setup
 
 Copy and run this command first:
