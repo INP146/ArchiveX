@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   FiArrowLeft,
   FiBarChart2,
@@ -25,7 +25,12 @@ type TimelineTab = "posts" | "replies" | "media";
 
 export function AccountPage() {
   const { accountId } = useParams({ from: "/accounts/$accountId" });
-  const [activeTab, setActiveTab] = useState<TimelineTab>("posts");
+  const [activeTab, setActiveTab] = useState<TimelineTab>(() => window.location.hash === "#media" ? "media" : "posts");
+  useEffect(() => {
+    const syncTabFromHash = () => setActiveTab(window.location.hash === "#media" ? "media" : "posts");
+    window.addEventListener("hashchange", syncTabFromHash);
+    return () => window.removeEventListener("hashchange", syncTabFromHash);
+  }, []);
   const account = useQuery({
     queryKey: ["account", accountId],
     queryFn: () => getAccount(accountId)
@@ -46,9 +51,7 @@ export function AccountPage() {
 
   const profile = account.data;
   return (
-    <div className="x-profile-shell">
-      <aside className="x-empty-rail x-empty-rail-left" aria-hidden="true" />
-      <main className="x-profile-column">
+    <div className="x-profile-column">
         <header className="x-profile-header">
           <Link to="/" className="x-icon-button" aria-label="返回归档总览"><FiArrowLeft /></Link>
           <div className="x-header-copy">
@@ -105,8 +108,6 @@ export function AccountPage() {
           )}
           {visiblePosts.map((post) => <PostItem key={post.tweet_id} post={post} avatarUrl={profile.profile_image_url} displayName={profile.display_name ?? profile.username} />)}
         </section>
-      </main>
-      <aside className="x-empty-rail x-empty-rail-right" aria-hidden="true" />
     </div>
   );
 }
@@ -166,16 +167,16 @@ function PostMetric({ icon, value, label }: { icon: React.ReactNode; value: numb
 }
 
 function PageState({ message }: { message: string }) {
-  return <div className="x-profile-shell"><aside /><main className="x-profile-column x-page-state">{message}</main><aside /></div>;
+  return <div className="x-profile-column x-page-state">{message}</div>;
 }
 
 function PageError({ error }: { error: Error }) {
   const unauthenticated = error instanceof ApiError && error.status === 401;
   return (
-    <div className="x-profile-shell"><aside /><main className="x-profile-column x-page-state">
+    <div className="x-profile-column x-page-state">
       <p>{unauthenticated ? "需要登录才能查看这个账号归档。" : error.message}</p>
       {unauthenticated && <Link to="/login">去登录</Link>}
-    </main><aside /></div>
+    </div>
   );
 }
 

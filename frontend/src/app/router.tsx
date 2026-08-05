@@ -13,7 +13,10 @@ import { AccountPage } from "../features/accounts/account-page";
 import { LoginPage } from "../features/auth/login-page";
 import { DashboardPage } from "../features/dashboard/dashboard-page";
 import { SyncRunsPage } from "../features/sync-runs/sync-runs-page";
+import { ArchiveSidebar } from "../components/archive-sidebar";
+import { getAccount, getAccounts } from "../lib/api/accounts";
 import { deleteSession, getSession } from "../lib/api/auth";
+import "./archive-shell.css";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -69,6 +72,17 @@ declare module "@tanstack/react-router" {
 function AppShell() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const session = useQuery({ queryKey: ["session"], queryFn: getSession });
+  const accounts = useQuery({
+    queryKey: ["accounts"],
+    queryFn: getAccounts,
+    enabled: session.data?.authenticated === true
+  });
+  const primaryAccountId = accounts.data?.[0]?.id;
+  const primaryAccount = useQuery({
+    queryKey: ["account", primaryAccountId],
+    queryFn: () => getAccount(String(primaryAccountId)),
+    enabled: primaryAccountId !== undefined
+  });
   const logout = useMutation({
     mutationFn: deleteSession,
     onSuccess: async () => {
@@ -77,25 +91,15 @@ function AppShell() {
     }
   });
 
-  if (pathname === "/login" || pathname.startsWith("/accounts/")) {
+  if (pathname === "/login") {
     return <Outlet />;
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-950">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6">
-          <Link to="/" className="text-lg font-semibold">ArchiveX</Link>
-          <nav className="flex items-center gap-5 text-sm text-slate-600">
-            <Link to="/" activeProps={{ className: "font-semibold text-slate-950" }}>总览</Link>
-            <Link to="/sync-runs" activeProps={{ className: "font-semibold text-slate-950" }}>同步记录</Link>
-            {session.data?.authenticated ? (
-              <button type="button" onClick={() => logout.mutate()} className="text-sm">退出</button>
-            ) : <Link to="/login">登录</Link>}
-          </nav>
-        </div>
-      </header>
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6"><Outlet /></main>
+    <div className="x-app-shell">
+      <ArchiveSidebar account={primaryAccount.data} onLogout={() => logout.mutate()} />
+      <main className="x-app-content"><Outlet /></main>
+      <aside className="x-empty-rail x-empty-rail-right" aria-hidden="true" />
     </div>
   );
 }

@@ -34,6 +34,7 @@
 **Comparison History**
 
 - Initial pass: blocked before visual comparison because no supported browser surface was available.
+- Sidebar pass: replaced the empty left rail with the X-style persistent navigation, responsive icon-only rail, archive export action, and current-account control. Browser capture remains unavailable.
 
 **Follow-up Polish**
 
