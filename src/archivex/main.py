@@ -10,6 +10,7 @@ from fastapi import FastAPI
 
 from archivex.config import Settings, get_settings
 from archivex.logging import configure_logging
+from archivex.media import GalleryDlMediaDownloader
 from archivex.source import TwscrapePostSource
 from archivex.storage import initialize_storage
 from archivex.storage import ArchiveRepository
@@ -38,6 +39,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 source,
                 app_settings.archive_initial_post_limit,
                 app_settings.archive_incremental_known_post_limit,
+                GalleryDlMediaDownloader(), app_settings.archive_media_enabled,
+                app_settings.archive_media_max_bytes,
             )
             sync_task = asyncio.create_task(
                 _sync_loop(service, app_settings.archive_accounts,

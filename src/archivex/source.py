@@ -27,6 +27,13 @@ class SourcePost:
     posted_at: datetime
     permalink: str
     raw_payload: Mapping[str, Any]
+    media: tuple["SourceMedia", ...] = ()
+
+
+@dataclass(frozen=True)
+class SourceMedia:
+    media_type: str
+    source_url: str
 
 
 class PostSource(Protocol):
@@ -57,6 +64,7 @@ class TwscrapePostSource:
             # Conversation payloads can include another user's quoted/replied post.
             if str(tweet.user.id) != x_user_id:
                 continue
+            raw_payload = tweet.dict()
             yield SourcePost(
                 tweet_id=str(tweet.id),
                 x_user_id=x_user_id,
@@ -65,7 +73,8 @@ class TwscrapePostSource:
                 text=tweet.rawContent,
                 posted_at=tweet.date,
                 permalink=tweet.url,
-                raw_payload=tweet.dict(),
+                raw_payload=raw_payload,
+                media=media_from_payload(raw_payload),
             )
 
 
@@ -77,3 +86,21 @@ def _post_type(tweet: Any) -> str:
     if tweet.inReplyToTweetId is not None:
         return "reply"
     return "original"
+
+
+def media_from_payload(payload: Mapping[str, Any]) -> tuple[SourceMedia, ...]:
+    """Extract downloadable media from twscrape's serializable tweet payload."""
+    media = payload.get("media") or {}
+    items = [
+        SourceMedia("image", photo["url"])
+        for photo in media.get("photos", []) if photo.get("url")
+    ]
+    items.extend(
+        SourceMedia("video", max(video["variants"], key=lambda variant: variant["bitrate"])["url"])
+        for video in media.get("videos", []) if video.get("variants")
+    )
+    items.extend(
+        SourceMedia("gif", animated["videoUrl"])
+        for animated in media.get("animated", []) if animated.get("videoUrl")
+    )
+    return tuple(items)

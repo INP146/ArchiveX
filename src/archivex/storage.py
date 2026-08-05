@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS posts (
     posted_at TEXT NOT NULL,
     permalink TEXT NOT NULL,
     raw_json_path TEXT NOT NULL,
+    media_scanned_at TEXT,
     first_seen_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -101,6 +102,14 @@ class MediaInput:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class MediaRecord:
+    id: str
+    tweet_id: str
+    source_url: str
+    download_status: str
+
+
 def initialize_storage(database_path: Path, archive_data_dir: Path, session_path: Path) -> None:
     """Create persistent locations and apply the initial SQLite schema."""
     database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,6 +118,9 @@ def initialize_storage(database_path: Path, archive_data_dir: Path, session_path
     session_directory.mkdir(parents=True, exist_ok=True)
     with _connect(database_path) as connection:
         connection.executescript(SCHEMA)
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(posts)")}
+        if "media_scanned_at" not in columns:
+            connection.execute("ALTER TABLE posts ADD COLUMN media_scanned_at TEXT")
 
 
 class ArchiveRepository:
@@ -175,11 +187,45 @@ class ArchiveRepository:
                 ON CONFLICT(tweet_id) DO UPDATE SET account_id = excluded.account_id,
                     post_type = excluded.post_type, text = excluded.text, posted_at = excluded.posted_at,
                     permalink = excluded.permalink, raw_json_path = excluded.raw_json_path,
-                    updated_at = excluded.updated_at""",
+                    media_scanned_at = NULL, updated_at = excluded.updated_at""",
                 (post.tweet_id, post.account_id, post.post_type, post.text, _timestamp(post.posted_at),
                  post.permalink, raw_json_path, now, now),
             )
         return is_new
+
+    def unscanned_post_media(self) -> list[tuple[str, Mapping[str, Any]]]:
+        with _connect(self.database_path) as connection:
+            rows = connection.execute(
+                "SELECT tweet_id, raw_json_path FROM posts WHERE media_scanned_at IS NULL"
+            ).fetchall()
+        posts = []
+        for row in rows:
+            try:
+                payload = json.loads((self.archive_data_dir / row["raw_json_path"]).read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            posts.append((str(row["tweet_id"]), payload))
+        return posts
+
+    def mark_post_media_scanned(self, tweet_id: str) -> None:
+        with _connect(self.database_path) as connection:
+            connection.execute(
+                "UPDATE posts SET media_scanned_at = ? WHERE tweet_id = ?",
+                (_timestamp(), tweet_id),
+            )
+
+    def create_media_if_missing(self, media: MediaInput) -> bool:
+        now = _timestamp()
+        with _connect(self.database_path) as connection:
+            result = connection.execute(
+                """INSERT INTO media (id, tweet_id, media_type, source_url, local_path, download_status,
+                    sha256, error, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tweet_id, source_url) DO NOTHING""",
+                (str(uuid.uuid4()), media.tweet_id, media.media_type, media.source_url,
+                 media.local_path, media.download_status, media.sha256, media.error, now, now),
+            )
+        return result.rowcount == 1
 
     def upsert_media(self, media: MediaInput) -> str:
         now = _timestamp()
@@ -200,6 +246,40 @@ class ArchiveRepository:
                 (media.tweet_id, media.source_url),
             ).fetchone()
         return str(row["id"])
+
+    def media_to_download(self, tweet_id: str) -> list[MediaRecord]:
+        with _connect(self.database_path) as connection:
+            rows = connection.execute(
+                """SELECT id, tweet_id, source_url, download_status FROM media
+                WHERE tweet_id = ? AND download_status IN ('pending', 'failed') ORDER BY created_at, id""",
+                (tweet_id,),
+            ).fetchall()
+        return [MediaRecord(**dict(row)) for row in rows]
+
+    def post_directory(self, tweet_id: str) -> Path:
+        with _connect(self.database_path) as connection:
+            row = connection.execute(
+                "SELECT raw_json_path FROM posts WHERE tweet_id = ?", (tweet_id,)
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"unknown tweet ID: {tweet_id}")
+        return (self.archive_data_dir / str(row["raw_json_path"])).parent
+
+    def complete_media(self, media_id: str, local_path: Path, sha256: str) -> None:
+        relative_path = local_path.relative_to(self.archive_data_dir).as_posix()
+        with _connect(self.database_path) as connection:
+            connection.execute(
+                """UPDATE media SET local_path = ?, sha256 = ?, download_status = 'completed', error = NULL,
+                updated_at = ? WHERE id = ?""",
+                (relative_path, sha256, _timestamp(), media_id),
+            )
+
+    def fail_media(self, media_id: str, error: str) -> None:
+        with _connect(self.database_path) as connection:
+            connection.execute(
+                "UPDATE media SET download_status = 'failed', error = ?, updated_at = ? WHERE id = ?",
+                (error, _timestamp(), media_id),
+            )
 
     def start_sync_run(self, account_id: int) -> str:
         run_id = str(uuid.uuid4())
