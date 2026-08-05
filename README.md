@@ -34,10 +34,16 @@ twscrape account database file or a directory containing `accounts.db`. Its
 accounts and login state must be provisioned before ArchiveX starts; credentials
 are not accepted by the web service or stored in this repository.
 
-## Read-only API
+## Authentication and API
 
-All `/api/*` routes require `Authorization: Bearer <WEB_AUTH_TOKEN>`. The service
-exposes archived accounts (`GET /api/accounts`), posts (`GET /api/posts` and
+Browser clients establish a session with `POST /api/auth/session` and then use a
+signed, HttpOnly cookie. `DELETE /api/auth/session` logs out and `GET
+/api/auth/session` reports whether the browser is authenticated. Script clients
+can continue to use `Authorization: Bearer <WEB_AUTH_TOKEN>` for protected API
+routes. Set a separate random `WEB_SESSION_SECRET` of at least 32 characters in
+production, and set `WEB_COOKIE_SECURE=true` when serving over HTTPS.
+
+Protected routes expose archived accounts (`GET /api/accounts`), posts (`GET /api/posts` and
 `GET /api/posts/{tweet_id}`), downloaded media (`GET /api/media/{id}`), and sync
 history (`GET /api/sync-runs`). Post lists support `account_id`, `q`, `from`,
 `to`, `has_media`, `limit`, and `offset` query parameters.

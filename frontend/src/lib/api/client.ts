@@ -14,5 +14,8 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     const body = await response.json().catch(() => null) as { detail?: string } | null;
     throw new ApiError(response.status, body?.detail ?? "请求失败，请稍后重试。");
   }
+  if (response.status === 204) {
+    return undefined as T;
+  }
   return response.json() as Promise<T>;
 }

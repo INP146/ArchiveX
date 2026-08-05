@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import hashlib
 from contextlib import asynccontextmanager
 from contextlib import suppress
 from typing import AsyncIterator
 
 from fastapi import FastAPI
+from starlette.middleware.sessions import SessionMiddleware
 
-from archivex.api import create_api_router
+from archivex.api import create_api_router, create_auth_router
 from archivex.config import Settings, get_settings
 from archivex.logging import configure_logging
 from archivex.media import GalleryDlMediaDownloader
@@ -60,7 +62,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logger.info("ArchiveX stopped")
 
     app = FastAPI(title="ArchiveX", version="0.1.0", lifespan=lifespan)
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=app_settings.web_session_secret or _derived_session_secret(app_settings.web_auth_token),
+        session_cookie="archivex_session",
+        max_age=60 * 60 * 24 * 30,
+        same_site="lax",
+        https_only=app_settings.web_cookie_secure,
+    )
     repository = ArchiveRepository(app_settings.archive_db_path, app_settings.archive_data_dir)
+    app.include_router(create_auth_router(app_settings.web_auth_token))
     app.include_router(create_api_router(repository, app_settings.web_auth_token))
 
     @app.get("/health", tags=["system"])
@@ -68,6 +79,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     return app
+
+
+def _derived_session_secret(auth_token: str) -> str:
+    return hashlib.sha256(f"archivex-session:{auth_token}".encode()).hexdigest()
 
 
 async def _sync_loop(service: ArchiveSyncService, usernames: list[str], interval_seconds: int,

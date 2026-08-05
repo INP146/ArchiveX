@@ -40,5 +40,5 @@ function ErrorState({ error }: { error: Error }) {
   const message = error instanceof ApiError && error.status === 401
     ? "需要先登录才能查看归档。"
     : error.message;
-  return <p className="border border-red-200 bg-red-50 p-4 text-sm text-red-800">{message}</p>;
+  return <p className="border border-red-200 bg-red-50 p-4 text-sm text-red-800">{message} <Link to="/login" className="underline">去登录</Link></p>;
 }

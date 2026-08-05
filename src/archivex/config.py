@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     web_host: str = "0.0.0.0"
     web_port: int = Field(default=8000, ge=1, le=65535)
     web_auth_token: str = Field(min_length=1)
+    web_session_secret: str | None = Field(default=None, min_length=32)
+    web_cookie_secure: bool = False
     log_level: str = "INFO"
 
     @field_validator("archive_accounts", mode="before")

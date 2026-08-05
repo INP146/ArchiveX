@@ -5,11 +5,41 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel, Field
 
 from archivex.storage import ArchiveMedia, ArchiveRepository
+
+
+class SessionLoginRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=4096)
+
+
+def create_auth_router(auth_token: str) -> APIRouter:
+    router = APIRouter(prefix="/api", tags=["authentication"])
+
+    @router.post("/auth/session", status_code=status.HTTP_204_NO_CONTENT)
+    def create_session(payload: SessionLoginRequest, request: Request) -> Response:
+        if not secrets.compare_digest(payload.token, auth_token):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid authentication token",
+            )
+        request.session["authenticated"] = True
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @router.get("/auth/session")
+    def get_session(request: Request) -> dict[str, bool]:
+        return {"authenticated": request.session.get("authenticated") is True}
+
+    @router.delete("/auth/session", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_session(request: Request) -> Response:
+        request.session.clear()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    return router
 
 
 def create_api_router(repository: ArchiveRepository, auth_token: str) -> APIRouter:
@@ -81,8 +111,11 @@ def _require_token(expected_token: str):
     security = HTTPBearer(auto_error=False)
 
     def require_token(
+        request: Request,
         credentials: HTTPAuthorizationCredentials | None = Depends(security),
     ) -> None:
+        if request.session.get("authenticated") is True:
+            return
         if credentials is None or not secrets.compare_digest(credentials.credentials, expected_token):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

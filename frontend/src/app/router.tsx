@@ -6,10 +6,13 @@ import {
   createRoute,
   createRouter
 } from "@tanstack/react-router";
+import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { AccountPage } from "../features/accounts/account-page";
+import { LoginPage } from "../features/auth/login-page";
 import { DashboardPage } from "../features/dashboard/dashboard-page";
 import { SyncRunsPage } from "../features/sync-runs/sync-runs-page";
+import { deleteSession, getSession } from "../lib/api/auth";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -31,6 +34,12 @@ const dashboardRoute = createRoute({
   component: DashboardPage
 });
 
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/login",
+  component: LoginPage
+});
+
 const accountRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/accounts/$accountId",
@@ -43,7 +52,7 @@ const syncRunsRoute = createRoute({
   component: SyncRunsPage
 });
 
-const routeTree = rootRoute.addChildren([dashboardRoute, accountRoute, syncRunsRoute]);
+const routeTree = rootRoute.addChildren([dashboardRoute, loginRoute, accountRoute, syncRunsRoute]);
 
 export const router = createRouter({
   routeTree,
@@ -57,6 +66,19 @@ declare module "@tanstack/react-router" {
 }
 
 function AppShell() {
+  const session = useQuery({ queryKey: ["session"], queryFn: getSession });
+  const logout = useMutation({
+    mutationFn: deleteSession,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries();
+      await router.navigate({ to: "/login" });
+    }
+  });
+
+  if (location.pathname === "/login") {
+    return <Outlet />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-950">
       <header className="border-b border-slate-200 bg-white">
@@ -65,6 +87,9 @@ function AppShell() {
           <nav className="flex items-center gap-5 text-sm text-slate-600">
             <Link to="/" activeProps={{ className: "font-semibold text-slate-950" }}>总览</Link>
             <Link to="/sync-runs" activeProps={{ className: "font-semibold text-slate-950" }}>同步记录</Link>
+            {session.data?.authenticated ? (
+              <button type="button" onClick={() => logout.mutate()} className="text-sm">退出</button>
+            ) : <Link to="/login">登录</Link>}
           </nav>
         </div>
       </header>
