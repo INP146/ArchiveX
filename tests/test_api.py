@@ -14,6 +14,9 @@ def _settings(tmp_path) -> Settings:
         archive_data_dir=tmp_path / "archive",
         twscrape_session_path=tmp_path / "sessions",
         web_auth_token="test-token",
+        web_auth_display_name="Test Admin",
+        web_auth_username="test_admin",
+        web_auth_avatar_url="https://example.test/admin.jpg",
     )
 
 
@@ -70,14 +73,21 @@ def test_archive_api_requires_authentication_and_returns_archived_data(tmp_path)
 def test_browser_session_authentication_does_not_expose_the_token(tmp_path) -> None:
     settings = _settings(tmp_path)
     with TestClient(create_app(settings)) as client:
-        assert client.get("/api/auth/session").json() == {"authenticated": False}
+        assert client.get("/api/auth/session").json() == {"authenticated": False, "user": None}
         assert client.post("/api/auth/session", json={"token": "wrong"}).status_code == 401
         response = client.post("/api/auth/session", json={"token": "test-token"})
         assert response.status_code == 204
         cookie = response.headers["set-cookie"]
         assert "httponly" in cookie.lower()
         assert "test-token" not in cookie
-        assert client.get("/api/auth/session").json() == {"authenticated": True}
+        assert client.get("/api/auth/session").json() == {
+            "authenticated": True,
+            "user": {
+                "display_name": "Test Admin",
+                "username": "test_admin",
+                "avatar_url": "https://example.test/admin.jpg",
+            },
+        }
         assert client.get("/api/accounts").status_code == 200
         assert client.delete("/api/auth/session").status_code == 204
         assert client.get("/api/accounts").status_code == 401

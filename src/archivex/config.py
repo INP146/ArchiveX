@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     web_host: str = "0.0.0.0"
     web_port: int = Field(default=8000, ge=1, le=65535)
     web_auth_token: str = Field(min_length=1)
+    web_auth_display_name: str = Field(default="ArchiveX 管理员", min_length=1, max_length=80)
+    web_auth_username: str = Field(default="admin", min_length=1, max_length=50)
+    web_auth_avatar_url: str | None = None
     web_session_secret: str | None = Field(default=None, min_length=32)
     web_cookie_secure: bool = False
     log_level: str = "INFO"
@@ -45,6 +48,19 @@ class Settings(BaseSettings):
         if value == 0 or value < -1:
             raise ValueError("must be -1 or a positive integer")
         return value
+
+    @field_validator("web_auth_username")
+    @classmethod
+    def normalize_auth_username(cls, value: str) -> str:
+        username = value.strip().lstrip("@")
+        if not username:
+            raise ValueError("must contain a username")
+        return username
+
+    @field_validator("web_auth_avatar_url", mode="before")
+    @classmethod
+    def normalize_optional_url(cls, value: str | None) -> str | None:
+        return value or None
 
 
 @lru_cache

@@ -97,7 +97,12 @@ function AppShell() {
 
   return (
     <div className="x-app-shell">
-      <ArchiveSidebar account={primaryAccount.data} onLogout={() => logout.mutate()} />
+      <ArchiveSidebar
+        account={primaryAccount.data}
+        viewer={session.data?.user}
+        onLogout={() => logout.mutate()}
+        onSwitchAccount={() => logout.mutate()}
+      />
       <main className="x-app-content"><Outlet /></main>
       <aside className="x-empty-rail x-empty-rail-right" aria-hidden="true" />
     </div>

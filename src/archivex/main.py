@@ -71,7 +71,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         https_only=app_settings.web_cookie_secure,
     )
     repository = ArchiveRepository(app_settings.archive_db_path, app_settings.archive_data_dir)
-    app.include_router(create_auth_router(app_settings.web_auth_token))
+    app.include_router(create_auth_router(
+        app_settings.web_auth_token,
+        app_settings.web_auth_display_name,
+        app_settings.web_auth_username,
+        app_settings.web_auth_avatar_url,
+    ))
     app.include_router(create_api_router(repository, app_settings.web_auth_token))
 
     @app.get("/health", tags=["system"])

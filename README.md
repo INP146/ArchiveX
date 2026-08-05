@@ -42,6 +42,9 @@ signed, HttpOnly cookie. `DELETE /api/auth/session` logs out and `GET
 can continue to use `Authorization: Bearer <WEB_AUTH_TOKEN>` for protected API
 routes. Set a separate random `WEB_SESSION_SECRET` of at least 32 characters in
 production, and set `WEB_COOKIE_SECURE=true` when serving over HTTPS.
+`WEB_AUTH_DISPLAY_NAME`, `WEB_AUTH_USERNAME`, and `WEB_AUTH_AVATAR_URL` define
+the identity shown for the current token-authenticated user in the web sidebar;
+they are independent from the X accounts being archived.
 
 Protected routes expose archived accounts (`GET /api/accounts`), posts (`GET /api/posts` and
 `GET /api/posts/{tweet_id}`), downloaded media (`GET /api/media/{id}`), and sync

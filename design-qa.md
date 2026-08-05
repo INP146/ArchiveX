@@ -35,6 +35,7 @@
 
 - Initial pass: blocked before visual comparison because no supported browser surface was available.
 - Sidebar pass: replaced the empty left rail with the X-style persistent navigation, responsive icon-only rail, archive export action, and current-account control. Browser capture remains unavailable.
+- Login-account pass: decoupled the bottom account control from archived targets, added a session-backed identity, and moved account switching/logout into the bottom three-dot menu.
 
 **Follow-up Polish**
 

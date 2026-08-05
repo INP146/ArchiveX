@@ -17,8 +17,14 @@ class SessionLoginRequest(BaseModel):
     token: str = Field(min_length=1, max_length=4096)
 
 
-def create_auth_router(auth_token: str) -> APIRouter:
+def create_auth_router(auth_token: str, display_name: str, username: str,
+                       avatar_url: str | None) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["authentication"])
+    identity = {
+        "display_name": display_name,
+        "username": username,
+        "avatar_url": avatar_url,
+    }
 
     @router.post("/auth/session", status_code=status.HTTP_204_NO_CONTENT)
     def create_session(payload: SessionLoginRequest, request: Request) -> Response:
@@ -31,8 +37,9 @@ def create_auth_router(auth_token: str) -> APIRouter:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.get("/auth/session")
-    def get_session(request: Request) -> dict[str, bool]:
-        return {"authenticated": request.session.get("authenticated") is True}
+    def get_session(request: Request) -> dict[str, Any]:
+        authenticated = request.session.get("authenticated") is True
+        return {"authenticated": authenticated, "user": identity if authenticated else None}
 
     @router.delete("/auth/session", status_code=status.HTTP_204_NO_CONTENT)
     def delete_session(request: Request) -> Response:

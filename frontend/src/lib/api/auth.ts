@@ -1,7 +1,14 @@
 import { apiFetch } from "./client";
 
+export interface SessionUser {
+  display_name: string;
+  username: string;
+  avatar_url: string | null;
+}
+
 export interface Session {
   authenticated: boolean;
+  user: SessionUser | null;
 }
 
 export function getSession() {

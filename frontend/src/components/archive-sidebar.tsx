@@ -16,11 +16,22 @@ import {
 } from "react-icons/fi";
 
 import { Account } from "../lib/api/accounts";
+import { SessionUser } from "../lib/api/auth";
 
-export function ArchiveSidebar({ account, onLogout }: { account?: Account; onLogout: () => void }) {
+export function ArchiveSidebar({
+  account,
+  viewer,
+  onLogout,
+  onSwitchAccount
+}: {
+  account?: Account;
+  viewer?: SessionUser | null;
+  onLogout: () => void;
+  onSwitchAccount: () => void;
+}) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const profilePath = account ? `/accounts/${account.id}` : "/";
-  const [moreOpen, setMoreOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
 
   return (
     <aside className="x-left-rail">
@@ -36,14 +47,7 @@ export function ArchiveSidebar({ account, onLogout }: { account?: Account; onLog
             ? <a href={`/api/accounts/${account.id}`} target="_blank" rel="noreferrer" className="x-sidebar-item"><FiDatabase /><span>数据导出</span></a>
             : <span className="x-sidebar-item is-disabled"><FiDatabase /><span>数据导出</span></span>}
           <button type="button" className="x-sidebar-item"><FiSettings /><span>设置</span></button>
-          <div className="x-sidebar-more-wrap">
-            <button type="button" className="x-sidebar-item" onClick={() => setMoreOpen((open) => !open)} aria-expanded={moreOpen}><FiMoreHorizontal /><span>更多</span></button>
-            {moreOpen && (
-              <div className="x-sidebar-menu">
-                <button type="button" onClick={onLogout}><FiLogOut /><span>退出登录</span></button>
-              </div>
-            )}
-          </div>
+          <button type="button" className="x-sidebar-item"><FiMoreHorizontal /><span>更多</span></button>
         </nav>
 
         {account ? (
@@ -52,16 +56,29 @@ export function ArchiveSidebar({ account, onLogout }: { account?: Account; onLog
           </a>
         ) : <span className="x-sidebar-primary is-disabled"><FiDownload /><span>导出归档</span></span>}
 
-        <a href={profilePath} className="x-sidebar-account">
-          <span className="x-avatar x-sidebar-avatar">
-            {account?.profile_image_url ? <img src={account.profile_image_url} alt="" /> : <FiUser aria-hidden="true" />}
-          </span>
-          <span className="x-sidebar-account-copy">
-            <strong>{account?.display_name ?? "ArchiveX"}</strong>
-            <span>{account ? `@${account.username}` : "私人归档"}</span>
-          </span>
-          <FiMoreHorizontal className="x-sidebar-account-more" />
-        </a>
+        <div className="x-sidebar-account-wrap">
+          {accountMenuOpen && (
+            <div className="x-sidebar-account-menu">
+              <button type="button" onClick={onSwitchAccount}><FiUser /><span>添加已有账号</span></button>
+              <button type="button" onClick={onLogout}><FiLogOut /><span>登出 @{viewer?.username ?? "账户"}</span></button>
+            </div>
+          )}
+          <button
+            type="button"
+            className="x-sidebar-account"
+            onClick={() => setAccountMenuOpen((open) => !open)}
+            aria-expanded={accountMenuOpen}
+          >
+            <span className="x-avatar x-sidebar-avatar">
+              {viewer?.avatar_url ? <img src={viewer.avatar_url} alt="" /> : <FiUser aria-hidden="true" />}
+            </span>
+            <span className="x-sidebar-account-copy">
+              <strong>{viewer?.display_name ?? "未登录"}</strong>
+              <span>{viewer ? `@${viewer.username}` : "登录账户"}</span>
+            </span>
+            <FiMoreHorizontal className="x-sidebar-account-more" />
+          </button>
+        </div>
       </div>
     </aside>
   );

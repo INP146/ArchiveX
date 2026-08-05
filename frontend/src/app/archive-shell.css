@@ -69,12 +69,6 @@
 .x-sidebar-item.is-disabled { color: #536471; pointer-events: none; }
 .x-sidebar-item svg { width: 25px; height: 25px; flex: 0 0 25px; stroke-width: 2; }
 .x-sidebar-item.is-active svg { stroke-width: 2.6; }
-.x-sidebar-more-wrap { position: relative; width: 100%; }
-.x-sidebar-menu { position: absolute; z-index: 30; bottom: 4px; left: 8px; width: 220px; padding: 8px 0; border: 1px solid #536471; border-radius: 12px; background: #000; box-shadow: 0 0 15px rgba(255, 255, 255, .16); }
-.x-sidebar-menu button { display: flex; width: 100%; align-items: center; gap: 12px; padding: 13px 16px; color: var(--x-text); font-size: 15px; font-weight: 700; }
-.x-sidebar-menu button:hover { background: rgba(231, 233, 234, .1); }
-.x-sidebar-menu svg { width: 20px; height: 20px; }
-
 .x-sidebar-primary {
   display: flex;
   width: 225px;
@@ -95,6 +89,42 @@
 .x-sidebar-primary.is-disabled { opacity: .45; pointer-events: none; }
 .x-sidebar-primary svg { display: none; width: 22px; height: 22px; }
 
+.x-sidebar-account-wrap {
+  position: relative;
+  width: 100%;
+  margin-top: auto;
+}
+
+.x-sidebar-account-menu {
+  position: absolute;
+  z-index: 40;
+  bottom: 72px;
+  left: -2px;
+  width: 300px;
+  overflow: hidden;
+  padding: 8px 0;
+  border: 1px solid #2f3336;
+  border-radius: 16px;
+  background: #16181c;
+  box-shadow: 0 0 20px rgba(255, 255, 255, .15);
+}
+
+.x-sidebar-account-menu button {
+  display: flex;
+  width: 100%;
+  min-height: 52px;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  color: var(--x-text);
+  font-size: 17px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.x-sidebar-account-menu button:hover { background: rgba(231, 233, 234, .1); }
+.x-sidebar-account-menu svg { width: 21px; height: 21px; }
+
 .x-sidebar-account {
   display: grid;
   width: 100%;
@@ -102,7 +132,6 @@
   grid-template-columns: 40px minmax(0, 1fr) 20px;
   align-items: center;
   gap: 10px;
-  margin-top: auto;
   padding: 10px;
   border-radius: 999px;
   color: var(--x-text);
@@ -123,12 +152,11 @@
   .x-sidebar-nav { align-items: center; }
   .x-sidebar-item { width: 51px; justify-content: center; gap: 0; padding: 0; }
   .x-sidebar-item span { display: none; }
-  .x-sidebar-more-wrap { width: 51px; }
-  .x-sidebar-menu { bottom: 0; left: 58px; }
-  .x-sidebar-menu span { display: inline; }
   .x-sidebar-primary { width: 52px; min-height: 52px; }
   .x-sidebar-primary svg { display: block; }
   .x-sidebar-primary span { display: none; }
+  .x-sidebar-account-wrap { width: 52px; }
+  .x-sidebar-account-menu { right: auto; bottom: 62px; left: 58px; }
   .x-sidebar-account { display: flex; width: 52px; justify-content: center; padding: 6px; }
   .x-sidebar-account-copy, .x-sidebar-account-more { display: none; }
 }
