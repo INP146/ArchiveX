@@ -68,19 +68,18 @@ def create_api_router(repository: ArchiveRepository, auth_token: str) -> APIRout
     ) -> list[dict[str, Any]]:
         if from_at and to_at and from_at > to_at:
             raise HTTPException(status_code=422, detail="from must be before or equal to to")
-        return [_post_response(post) for post in repository.list_posts(
+        posts = repository.list_posts(
             account_id=account_id, query=q, from_at=from_at, to_at=to_at,
             has_media=has_media, limit=limit, offset=offset,
-        )]
+        )
+        return [_post_response(post, repository) for post in posts]
 
     @router.get("/posts/{tweet_id}")
     def get_post(tweet_id: str) -> dict[str, Any]:
         post = repository.get_post(tweet_id)
         if post is None:
             raise HTTPException(status_code=404, detail="post not found")
-        response = _post_response(post)
-        response["media"] = [_media_response(media) for media in repository.post_media(tweet_id)]
-        return response
+        return _post_response(post, repository)
 
     @router.get("/media/{media_id}")
     def get_media(media_id: str) -> FileResponse:
@@ -126,8 +125,11 @@ def _require_token(expected_token: str):
     return require_token
 
 
-def _post_response(post: Any) -> dict[str, Any]:
-    return post.__dict__.copy()
+def _post_response(post: Any, repository: ArchiveRepository) -> dict[str, Any]:
+    response = post.__dict__.copy()
+    response.update(repository.post_metrics(post.tweet_id))
+    response["media"] = [_media_response(media) for media in repository.post_media(post.tweet_id)]
+    return response
 
 
 def _media_response(media: ArchiveMedia) -> dict[str, Any]:

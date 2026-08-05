@@ -1,6 +1,6 @@
 import { apiFetch } from "./client";
 
-export interface Account {
+export interface AccountSummary {
   id: number;
   x_user_id: string;
   username: string;
@@ -11,6 +11,20 @@ export interface Account {
   post_count: number;
 }
 
+export interface Account extends AccountSummary {
+  description: string | null;
+  location: string | null;
+  profile_image_url: string | null;
+  profile_banner_url: string | null;
+  followers_count: number | null;
+  following_count: number | null;
+  joined_at: string | null;
+}
+
 export function getAccounts() {
-  return apiFetch<Account[]>("/api/accounts");
+  return apiFetch<AccountSummary[]>("/api/accounts");
+}
+
+export function getAccount(accountId: string) {
+  return apiFetch<Account>(`/api/accounts/${accountId}`);
 }

@@ -4,7 +4,8 @@ import {
   Outlet,
   createRootRouteWithContext,
   createRoute,
-  createRouter
+  createRouter,
+  useRouterState
 } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
@@ -66,6 +67,7 @@ declare module "@tanstack/react-router" {
 }
 
 function AppShell() {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const session = useQuery({ queryKey: ["session"], queryFn: getSession });
   const logout = useMutation({
     mutationFn: deleteSession,
@@ -75,7 +77,7 @@ function AppShell() {
     }
   });
 
-  if (location.pathname === "/login") {
+  if (pathname === "/login" || pathname.startsWith("/accounts/")) {
     return <Outlet />;
   }
 

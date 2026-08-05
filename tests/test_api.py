@@ -24,7 +24,15 @@ def test_archive_api_requires_authentication_and_returns_archived_data(tmp_path)
         account = repository.upsert_account("42", "example", "Example")
         repository.upsert_post(PostInput(
             "100", account.id, account.username, "original", "A useful archive post",
-            datetime(2026, 8, 5, 12, tzinfo=UTC), "https://x.com/example/status/100", {"id": "100"},
+            datetime(2026, 8, 5, 12, tzinfo=UTC), "https://x.com/example/status/100", {
+                "id": "100", "replyCount": 2, "retweetCount": 3, "likeCount": 4, "viewCount": 5,
+                "user": {
+                    "rawDescription": "Archived biography", "location": "Shanghai",
+                    "profileImageUrl": "https://example.test/avatar_normal.jpg",
+                    "profileBannerUrl": "https://example.test/banner", "followersCount": 12,
+                    "friendsCount": 7, "created": "2024-01-01 00:00:00+00:00",
+                },
+            },
         ))
         media_id = repository.upsert_media(MediaInput("100", "image", "https://example.test/image.jpg"))
         run_id = repository.start_sync_run(account.id)
@@ -42,6 +50,7 @@ def test_archive_api_requires_authentication_and_returns_archived_data(tmp_path)
         posts = client.get("/api/posts?q=useful&has_media=true", headers=headers)
         assert posts.status_code == 200
         assert posts.json()[0]["tweet_id"] == "100"
+        assert posts.json()[0]["like_count"] == 4
         detail = client.get("/api/posts/100", headers=headers)
         assert detail.status_code == 200
         assert detail.json()["media"] == [{
@@ -51,6 +60,11 @@ def test_archive_api_requires_authentication_and_returns_archived_data(tmp_path)
         runs = client.get("/api/sync-runs", headers=headers)
         assert runs.status_code == 200
         assert runs.json()[0]["id"] == run_id
+        profile = client.get(f"/api/accounts/{account.id}", headers=headers).json()
+        assert profile["description"] == "Archived biography"
+        assert profile["profile_image_url"] == "https://example.test/avatar_400x400.jpg"
+        assert profile["profile_banner_url"] == "https://example.test/banner/1500x500"
+        assert (profile["following_count"], profile["followers_count"]) == (7, 12)
 
 
 def test_browser_session_authentication_does_not_expose_the_token(tmp_path) -> None:

@@ -215,7 +215,11 @@ class ArchiveRepository:
                 WHERE accounts.id = ? GROUP BY accounts.id""",
                 (account_id,),
             ).fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+        account = dict(row)
+        account.update(self._account_profile(account_id))
+        return account
 
     def list_posts(self, *, account_id: int | None = None, query: str | None = None,
                    from_at: datetime | None = None, to_at: datetime | None = None,
@@ -283,6 +287,15 @@ class ArchiveRepository:
                 (media_id,),
             ).fetchone()
         return ArchiveMedia(**dict(row)) if row else None
+
+    def post_metrics(self, tweet_id: str) -> dict[str, int | None]:
+        payload = self._post_payload(tweet_id)
+        return {
+            "reply_count": _optional_int(payload.get("replyCount")),
+            "repost_count": _optional_int(payload.get("retweetCount")),
+            "like_count": _optional_int(payload.get("likeCount")),
+            "view_count": _optional_int(payload.get("viewCount")),
+        }
 
     def list_sync_runs(self, *, account_id: int | None = None, limit: int = 50,
                        offset: int = 0) -> list[SyncRun]:
@@ -457,6 +470,42 @@ class ArchiveRepository:
         os.replace(temporary_path, target_path)
         return relative_path.as_posix()
 
+    def _account_profile(self, account_id: int) -> dict[str, Any]:
+        with _connect(self.database_path) as connection:
+            row = connection.execute(
+                """SELECT raw_json_path FROM posts WHERE account_id = ?
+                ORDER BY posted_at DESC, tweet_id DESC LIMIT 1""",
+                (account_id,),
+            ).fetchone()
+        if row is None:
+            return _empty_account_profile()
+        payload = _read_payload(self.archive_data_dir / str(row["raw_json_path"]))
+        user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        profile_image_url = user.get("profileImageUrl")
+        if isinstance(profile_image_url, str):
+            profile_image_url = profile_image_url.replace("_normal.", "_400x400.")
+        banner_url = user.get("profileBannerUrl")
+        if isinstance(banner_url, str) and not banner_url.rstrip("/").endswith("1500x500"):
+            banner_url = f"{banner_url.rstrip('/')}/1500x500"
+        return {
+            "description": user.get("rawDescription") or user.get("description") or None,
+            "location": user.get("location") or None,
+            "profile_image_url": profile_image_url,
+            "profile_banner_url": banner_url,
+            "followers_count": _optional_int(user.get("followersCount")),
+            "following_count": _optional_int(user.get("friendsCount")),
+            "joined_at": user.get("created") or None,
+        }
+
+    def _post_payload(self, tweet_id: str) -> Mapping[str, Any]:
+        with _connect(self.database_path) as connection:
+            row = connection.execute(
+                "SELECT raw_json_path FROM posts WHERE tweet_id = ?", (tweet_id,)
+            ).fetchone()
+        if row is None:
+            return {}
+        return _read_payload(self.archive_data_dir / str(row["raw_json_path"]))
+
 
 def _connect(database_path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(database_path)
@@ -485,3 +534,30 @@ def _path_component(value: str) -> str:
 
 def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _read_payload(path: Path) -> Mapping[str, Any]:
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _empty_account_profile() -> dict[str, Any]:
+    return {
+        "description": None,
+        "location": None,
+        "profile_image_url": None,
+        "profile_banner_url": None,
+        "followers_count": None,
+        "following_count": None,
+        "joined_at": None,
+    }
