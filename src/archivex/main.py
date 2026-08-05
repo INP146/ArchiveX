@@ -8,6 +8,7 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
+from archivex.api import create_api_router
 from archivex.config import Settings, get_settings
 from archivex.logging import configure_logging
 from archivex.media import GalleryDlMediaDownloader
@@ -59,6 +60,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             logger.info("ArchiveX stopped")
 
     app = FastAPI(title="ArchiveX", version="0.1.0", lifespan=lifespan)
+    repository = ArchiveRepository(app_settings.archive_db_path, app_settings.archive_data_dir)
+    app.include_router(create_api_router(repository, app_settings.web_auth_token))
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:

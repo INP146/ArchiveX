@@ -110,6 +110,44 @@ class MediaRecord:
     download_status: str
 
 
+@dataclass(frozen=True)
+class ArchiveMedia:
+    id: str
+    media_type: str
+    local_path: str | None
+    download_status: str
+    sha256: str | None
+    error: str | None
+
+
+@dataclass(frozen=True)
+class ArchivedPost:
+    tweet_id: str
+    account_id: int
+    username: str
+    post_type: str
+    text: str
+    posted_at: str
+    permalink: str
+    first_seen_at: str
+    updated_at: str
+    media_count: int
+
+
+@dataclass(frozen=True)
+class SyncRun:
+    id: str
+    account_id: int
+    username: str
+    started_at: str
+    finished_at: str | None
+    posts_seen: int
+    posts_new: int
+    media_new: int
+    status: str
+    error: str | None
+
+
 def initialize_storage(database_path: Path, archive_data_dir: Path, session_path: Path) -> None:
     """Create persistent locations and apply the initial SQLite schema."""
     database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -155,6 +193,111 @@ class ArchiveRepository:
                 (x_user_id,),
             ).fetchone()
         return Account(**dict(row)) if row else None
+
+    def list_accounts(self) -> list[dict[str, Any]]:
+        with _connect(self.database_path) as connection:
+            rows = connection.execute(
+                """SELECT accounts.id, accounts.x_user_id, accounts.username, accounts.display_name,
+                    accounts.status, accounts.last_sync_at, accounts.last_error,
+                    COUNT(posts.tweet_id) AS post_count
+                FROM accounts LEFT JOIN posts ON posts.account_id = accounts.id
+                GROUP BY accounts.id ORDER BY accounts.username COLLATE NOCASE"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_account_by_id(self, account_id: int) -> dict[str, Any] | None:
+        with _connect(self.database_path) as connection:
+            row = connection.execute(
+                """SELECT accounts.id, accounts.x_user_id, accounts.username, accounts.display_name,
+                    accounts.status, accounts.last_sync_at, accounts.last_error,
+                    COUNT(posts.tweet_id) AS post_count
+                FROM accounts LEFT JOIN posts ON posts.account_id = accounts.id
+                WHERE accounts.id = ? GROUP BY accounts.id""",
+                (account_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_posts(self, *, account_id: int | None = None, query: str | None = None,
+                   from_at: datetime | None = None, to_at: datetime | None = None,
+                   has_media: bool | None = None, limit: int = 50, offset: int = 0) -> list[ArchivedPost]:
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if account_id is not None:
+            clauses.append("posts.account_id = ?")
+            parameters.append(account_id)
+        if query:
+            clauses.append("posts.text LIKE ? ESCAPE '\\'")
+            parameters.append(f"%{_escape_like(query)}%")
+        if from_at is not None:
+            clauses.append("posts.posted_at >= ?")
+            parameters.append(_timestamp(from_at))
+        if to_at is not None:
+            clauses.append("posts.posted_at <= ?")
+            parameters.append(_timestamp(to_at))
+        if has_media is True:
+            clauses.append("EXISTS (SELECT 1 FROM media WHERE media.tweet_id = posts.tweet_id)")
+        elif has_media is False:
+            clauses.append("NOT EXISTS (SELECT 1 FROM media WHERE media.tweet_id = posts.tweet_id)")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with _connect(self.database_path) as connection:
+            rows = connection.execute(
+                f"""SELECT posts.tweet_id, posts.account_id, accounts.username, posts.post_type,
+                    posts.text, posts.posted_at, posts.permalink, posts.first_seen_at, posts.updated_at,
+                    COUNT(media.id) AS media_count
+                FROM posts JOIN accounts ON accounts.id = posts.account_id
+                LEFT JOIN media ON media.tweet_id = posts.tweet_id
+                {where}
+                GROUP BY posts.tweet_id
+                ORDER BY posts.posted_at DESC, posts.tweet_id DESC LIMIT ? OFFSET ?""",
+                (*parameters, limit, offset),
+            ).fetchall()
+        return [ArchivedPost(**dict(row)) for row in rows]
+
+    def get_post(self, tweet_id: str) -> ArchivedPost | None:
+        with _connect(self.database_path) as connection:
+            row = connection.execute(
+                """SELECT posts.tweet_id, posts.account_id, accounts.username, posts.post_type,
+                    posts.text, posts.posted_at, posts.permalink, posts.first_seen_at, posts.updated_at,
+                    COUNT(media.id) AS media_count
+                FROM posts JOIN accounts ON accounts.id = posts.account_id
+                LEFT JOIN media ON media.tweet_id = posts.tweet_id
+                WHERE posts.tweet_id = ? GROUP BY posts.tweet_id""",
+                (tweet_id,),
+            ).fetchone()
+        return ArchivedPost(**dict(row)) if row else None
+
+    def post_media(self, tweet_id: str) -> list[ArchiveMedia]:
+        with _connect(self.database_path) as connection:
+            rows = connection.execute(
+                """SELECT id, media_type, local_path, download_status, sha256, error
+                FROM media WHERE tweet_id = ? ORDER BY created_at, id""",
+                (tweet_id,),
+            ).fetchall()
+        return [ArchiveMedia(**dict(row)) for row in rows]
+
+    def get_media(self, media_id: str) -> ArchiveMedia | None:
+        with _connect(self.database_path) as connection:
+            row = connection.execute(
+                """SELECT id, media_type, local_path, download_status, sha256, error
+                FROM media WHERE id = ?""",
+                (media_id,),
+            ).fetchone()
+        return ArchiveMedia(**dict(row)) if row else None
+
+    def list_sync_runs(self, *, account_id: int | None = None, limit: int = 50,
+                       offset: int = 0) -> list[SyncRun]:
+        where = "WHERE sync_runs.account_id = ?" if account_id is not None else ""
+        parameters: tuple[Any, ...] = ((account_id,) if account_id is not None else ()) + (limit, offset)
+        with _connect(self.database_path) as connection:
+            rows = connection.execute(
+                f"""SELECT sync_runs.id, sync_runs.account_id, accounts.username, sync_runs.started_at,
+                    sync_runs.finished_at, sync_runs.posts_seen, sync_runs.posts_new, sync_runs.media_new,
+                    sync_runs.status, sync_runs.error
+                FROM sync_runs JOIN accounts ON accounts.id = sync_runs.account_id {where}
+                ORDER BY sync_runs.started_at DESC LIMIT ? OFFSET ?""",
+                parameters,
+            ).fetchall()
+        return [SyncRun(**dict(row)) for row in rows]
 
     def mark_account_sync_success(self, account_id: int, completed_at: datetime) -> None:
         timestamp = _timestamp(completed_at)
@@ -338,3 +481,7 @@ def _path_component(value: str) -> str:
     if component in {"", ".", ".."}:
         raise ValueError("path component must contain a filename-safe character")
     return component
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
