@@ -22,6 +22,9 @@ dev = [
   "pytest>=8.0,<9.0",
 ]
 
+[project.scripts]
+archivex-session = "archivex.session:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

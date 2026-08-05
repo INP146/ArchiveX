@@ -8,6 +8,7 @@ from typing import Any, Mapping, Protocol
 
 from twscrape import API
 
+from archivex.session import session_database_path
 
 @dataclass(frozen=True)
 class SourceAccount:
@@ -38,7 +39,7 @@ class TwscrapePostSource:
     """Adapter around twscrape so archive logic is independent of its data model."""
 
     def __init__(self, session_path: Path) -> None:
-        database_path = session_path if session_path.suffix else session_path / "accounts.db"
+        database_path = session_database_path(session_path)
         self.api = API(str(database_path), raise_when_no_account=True)
 
     async def resolve_account(self, username: str) -> SourceAccount | None:

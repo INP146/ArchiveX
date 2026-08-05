@@ -31,6 +31,27 @@ twscrape account database file or a directory containing `accounts.db`. Its
 accounts and login state must be provisioned before ArchiveX starts; credentials
 are not accepted by the web service or stored in this repository.
 
+## X Session Setup
+
+Copy and run this command first:
+
+```sh
+.venv/bin/archivex-session --session-path ./data/twscrape cookies --username your_x_login --from-clipboard
+```
+
+While it is waiting, copy the cookie string from the browser. ArchiveX detects
+the new clipboard content and imports it automatically; there is nothing to
+paste into the terminal and no second Enter press.
+
+Check that the account is active:
+
+```sh
+.venv/bin/archivex-session --session-path ./data/twscrape status
+```
+
+Then set `ARCHIVE_ACCOUNTS` to the public accounts to archive and start the
+service. These targets do not need to be the account used for the session.
+
 ## Tests
 
 Use Python 3.11 or newer:
