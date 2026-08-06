@@ -102,3 +102,16 @@ async def _sync_loop(service: ArchiveSyncService, usernames: list[str], interval
             await asyncio.wait_for(stop.wait(), timeout=interval_seconds)
         except TimeoutError:
             pass
+
+
+def main() -> None:
+    """Development server entry point."""
+    import uvicorn
+    settings = get_settings()
+    uvicorn.run(
+        "archivex.main:create_app",
+        factory=True,
+        host=settings.web_host,
+        port=settings.web_port,
+        reload=True,
+    )
