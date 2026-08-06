@@ -1,4 +1,11 @@
-.x-profile-column { width: 600px; min-height: 100vh; background: #000; }
+.x-profile-column {
+  width: 600px;
+  height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  background: #000;
+}
 
 .x-profile-header {
   position: sticky;
