@@ -15,8 +15,8 @@ class Settings(BaseSettings):
 
     archive_accounts: Annotated[list[str], NoDecode] = Field(default_factory=list)
     twscrape_session_path: Path = Path("/data/twscrape")
-    archive_db_path: Path
-    archive_data_dir: Path
+    archive_db_path: Path = Path("/data/archive.sqlite3")
+    archive_data_dir: Path = Path("/data/archive")
     archive_initial_post_limit: int = Field(default=-1, ge=-1)
     archive_incremental_known_post_limit: int = 20
     archive_sync_interval_seconds: int = Field(default=21600, ge=60)

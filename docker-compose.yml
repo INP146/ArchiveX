@@ -1,10 +1,30 @@
 services:
   archivex:
     build: .
-    env_file: .env
     ports:
-      - "${WEB_PORT:-8000}:8000"
+      - "8000:8000"
     volumes:
       - ./data:/data
+    environment:
+      # Required: Comma-separated X usernames to archive
+      ARCHIVE_ACCOUNTS: ""
+
+      # Required: Authentication token for the web interface
+      WEB_AUTH_TOKEN: "change-me-in-production"
+
+      # Optional: Synchronization settings
+      # ARCHIVE_INITIAL_POST_LIMIT: 20
+      # ARCHIVE_INCREMENTAL_KNOWN_POST_LIMIT: 20
+      # ARCHIVE_SYNC_INTERVAL_SECONDS: 21600
+      # ARCHIVE_TIMEZONE: "Asia/Shanghai"
+
+      # Optional: Media download settings
+      # ARCHIVE_MEDIA_ENABLED: true
+      # ARCHIVE_MEDIA_MAX_BYTES: 0
+
+      # Optional: Web service settings
+      # WEB_HOST: "0.0.0.0"
+      # WEB_PORT: 8000
+      # LOG_LEVEL: "INFO"
     restart: unless-stopped
 
