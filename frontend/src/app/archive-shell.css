@@ -20,9 +20,16 @@
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
   border-right: 1px solid var(--x-border);
   border-left: 1px solid var(--x-border);
   background: #000;
+}
+
+.x-app-content::-webkit-scrollbar,
+.x-profile-column::-webkit-scrollbar {
+  display: none;
 }
 .x-empty-rail { }
 .x-empty-rail-right { border-left: 1px solid var(--x-border); }
