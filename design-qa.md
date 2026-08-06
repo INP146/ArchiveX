@@ -1,61 +1,63 @@
 **Comparison Target**
 
-- Source visual truth: user-provided X post screenshot in the current conversation.
-- Focused source truth: user-provided 1084 x 64 action-row crop in the current conversation.
-- Reply source truth: user-provided 1192 x 246 reply-post crop in the current conversation.
-- Source pixels: 1192 x 1386, interpreted as a 596 x 693 CSS-pixel capture at device scale factor 2.
-- Implementation: ArchiveX account route `/accounts/1`, first visible archived post after scrolling past the profile header.
-- Intended implementation viewport: 600px account column at device scale factor 1; responsive check at 390 x 844 CSS pixels.
-- State: authenticated, Posts tab selected, first archived repost visible.
+- Source visual truth: user-provided X account-list screenshot in the current conversation.
+- Source pixels: 1190 x 1536 pixels as displayed in the conversation; no local source file was exposed to this session.
+- Implementation route: `/accounts` in the existing ArchiveX React application.
+- Intended desktop viewport: 1440 x 900 CSS pixels at device scale factor 1, with the existing 600px center column.
+- Intended mobile viewport: 390 x 844 CSS pixels at device scale factor 1.
+- State: authenticated, real archived-account data loaded, dark theme.
 
 **Evidence**
 
-- Source image: visible in the conversation, but unavailable as a local file for a combined comparison artifact.
-- Implementation screenshot path: unavailable because this session does not expose a controllable in-app browser or connected browser surface.
-- Runtime evidence: the isolated read-only preview returns HTTP 200 for the page and post API.
-- Real-data evidence: first post returns the original author, repost attribution, cleaned display text, engagement metrics, and the original archived media URL.
-- Automated evidence: frontend production build passed; 18 backend tests passed.
-- Primary interactions tested in a rendered browser: blocked.
+- Source image path: unavailable; the reference exists only in the current conversation.
+- Implementation screenshot path: unavailable; the current session does not expose the in-app browser control surface required by the selected browser workflow.
+- Browser-rendered implementation screenshot: blocked.
+- Primary browser interactions tested: blocked.
 - Browser console errors checked: blocked.
-- Full-view visual comparison: blocked because no browser-rendered implementation screenshot can be captured.
-- Focused region comparison: blocked for the same reason.
+- Runtime/API evidence: isolated preview returns HTTP 200 for `/accounts` and `/accounts/1`; authenticated `/api/accounts` returns the real avatar, description, verification state, and post count.
+- Asset evidence: the real archived avatar URL returns HTTP 200 with a JPEG response.
+- Automated evidence: frontend production build passed; 19 backend tests passed, including 3 API tests.
+- Full-view combined comparison: blocked because neither the conversation reference nor a browser-rendered implementation capture can be supplied as a local comparison artifact.
+- Focused-region comparison: blocked for the same reason; the account identity row and sidebar selection state require rendered evidence.
 
 **Findings**
 
 - [P1] Rendered visual fidelity cannot be certified.
-  Location: account timeline post.
-  Evidence: the source screenshot is available only in the conversation and the implementation cannot be captured in a supported browser surface.
-  Impact: typography rendering, remote avatar loading, action alignment, sticky scroll position, and responsive overflow remain visually unverified.
-  Fix: capture the first visible post at a 600px content-column width and at 390px mobile width, combine each capture with the source image, then correct any visible P0/P1/P2 mismatch.
+  Location: `/accounts`, account rows and surrounding center-column layout.
+  Evidence: implementation code follows the source's avatar/identity/bio/action composition, but no supported browser capture is available for a same-viewport combined comparison.
+  Impact: final typography rendering, remote-avatar crop, row density, long-copy wrapping, and responsive alignment remain visually unverified.
+  Fix: capture `/accounts` at the desktop and mobile viewports above, combine each capture with the source reference in one comparison input, and correct any visible P0/P1/P2 mismatch.
+
+- [P1] Sidebar selection behavior lacks browser interaction evidence.
+  Location: `.x-sidebar-item` on `/accounts` and `/accounts/1`.
+  Evidence: route matching is exact in code (`pathname === "/accounts"`), so the list route selects “归档账号” and the detail route selects none; clicking through could not be exercised in the required browser surface.
+  Impact: the requested behavior is implemented but cannot receive visual QA sign-off without rendered navigation evidence.
+  Fix: click an account row in the browser, confirm the detail page opens, and verify no sidebar item has `.is-active`.
 
 **Required Fidelity Surfaces**
 
-- Fonts and typography: implemented with the existing X-style system font stack, 15px post copy, 20px line height, bold author name, muted metadata, and truncation for long handles; rendered comparison blocked.
-- Spacing and layout rhythm: post body now begins 48px after the outer inset, leaving an approximately 520px media/content region within the 600px column; rendered comparison blocked.
-- Colors and visual tokens: existing X dark tokens retained (`#000`, `#e7e9ea`, `#71767b`, `#1d9bf0`, `#536471`); rendered comparison blocked.
-- Image quality and asset fidelity: original archived media and original author avatar are used; media ratio, poster, and duration enhancements were explicitly rolled back; remote asset rendering blocked.
-- Copy and content: repost attribution, original author identity, media-link cleanup, relative time, translation eligibility, AI label support, and engagement metrics are present; rendered comparison blocked.
-- Reply copy and hierarchy: replies expose the target username from the raw payload, render `回复 @username` as a separate muted/blue line, and use `displayTextRange` so the leading mention is not repeated in the body; rendered comparison blocked.
+- Fonts and typography: existing X-style system font stack retained; list uses 20px/800 header, 15px/20px account copy, bold display name, muted handle, two-line bio clamp, and zero custom letter spacing. Rendered comparison blocked.
+- Spacing and layout rhythm: 600px center column, 53px sticky header, 112px minimum desktop rows, 48px avatars, 12px gaps, 16px outer padding, and 72 x 34px action pills. Rendered comparison blocked.
+- Colors and visual tokens: existing black background, `#e7e9ea` text, `#71767b` muted text, `#1d9bf0` verified accent, `#2f3336` dividers, and `#eff3f4` action surface retained. Rendered comparison blocked.
+- Image quality and asset fidelity: list uses the archived account's real 400 x 400 X avatar URL with circular object-cover rendering and the existing icon-library fallback only when no image exists. The real avatar URL is reachable; rendered crop and sharpness are blocked.
+- Copy and content: page title, account count, display name, handle, archived description, post-count fallback, and “查看” action are populated from real API data. The archive-specific action intentionally replaces the source's social “关注” action.
 
 **Implementation Checklist**
 
-- Capture the desktop account page with the first repost aligned to the top of the 600px column.
-- Check author row truncation, translation visibility, media crop, and action spacing.
-- Capture at 390 x 844 and check for horizontal overflow or overlapping author tools.
-- Compare each capture with the source in one image input and fix any P0/P1/P2 differences.
+- Capture the authenticated list at 1440 x 900 and 390 x 844.
+- Compare row height, avatar size, name/handle baseline, bio wrapping, divider contrast, and action alignment against the source.
+- Click from `/accounts` to `/accounts/1` and verify the sidebar has no selected tab.
+- Check the browser console and keyboard focus treatment.
 
 **Comparison History**
 
-- Initial implementation: post body was 510px wide, repost attribution appeared under the author, retweets used the archived account identity instead of the original author, media links leaked into copy, and single media lacked source metadata.
-- First correction: body geometry was aligned to X's 40px avatar plus 8px gap; repost attribution precedes the author row; original author, verification, and cleaned copy come from raw archived payloads.
-- Action-row correction: removed the flexible spacer that compressed metrics into the left half. Reply, repost, like, and views now occupy four equal tracks; bookmark and share use fixed 36px tracks at the right edge.
-- Scope rollback: removed video aspect ratio, poster, and duration fields from storage presentation, API responses, frontend types, and media rendering.
-- Reply correction: replaced the generic `回复帖子` label with the actual target account, increased it to the source's 15px line treatment, and separated the reply mention from the visible body using the archived `displayTextRange`.
-- Repost regression correction: the reply-specific article class initially reused the `.x-post-repost` name used by the repost attribution row, causing the entire repost article to inherit the row grid. Article type styling is now applied only as `.x-post-reply`, leaving `.x-post-repost` scoped to the attribution row.
-- Post-fix visual evidence: blocked because no supported browser capture surface is available.
+- Initial implementation pass: added the dedicated `/accounts` route, API-backed profile fields, responsive X-style account rows, exact sidebar activation, and a detail-page back link to the list.
+- Automated correction pass: an occupied local port initially routed preview requests to an older backend process. The preview was moved to isolated ports, after which the API returned the expected real profile data and both routes returned HTTP 200.
+- Annotation correction: removed the horizontal divider below each account row to match the user's latest visual direction; the sticky page-header boundary remains unchanged.
+- Post-fix visual evidence: blocked because the required in-app browser surface is unavailable.
 
 **Follow-up Polish**
 
-- No P3 items are classified until a rendered comparison is available.
+- No P3 items are classified until rendered comparison is available.
 
 final result: blocked

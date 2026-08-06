@@ -52,6 +52,11 @@ def test_archive_api_requires_authentication_and_returns_archived_data(tmp_path)
         assert accounts.json() == [{
             "id": account.id, "x_user_id": "42", "username": "example", "display_name": "Example",
             "status": "active", "last_sync_at": None, "last_error": None, "post_count": 1,
+            "description": "Archived biography", "location": "Shanghai",
+            "profile_image_url": "https://example.test/avatar_400x400.jpg",
+            "profile_banner_url": "https://example.test/banner/1500x500", "verified": True,
+            "followers_count": 12, "following_count": 7,
+            "joined_at": "2024-01-01 00:00:00+00:00",
         }]
         posts = client.get("/api/posts?q=useful&has_media=true", headers=headers)
         assert posts.status_code == 200

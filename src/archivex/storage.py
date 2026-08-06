@@ -203,7 +203,10 @@ class ArchiveRepository:
                 FROM accounts LEFT JOIN posts ON posts.account_id = accounts.id
                 GROUP BY accounts.id ORDER BY accounts.username COLLATE NOCASE"""
             ).fetchall()
-        return [dict(row) for row in rows]
+        accounts = [dict(row) for row in rows]
+        for account in accounts:
+            account.update(self._account_profile(account["id"]))
+        return accounts
 
     def get_account_by_id(self, account_id: int) -> dict[str, Any] | None:
         with _connect(self.database_path) as connection:
@@ -527,6 +530,7 @@ class ArchiveRepository:
             "location": user.get("location") or None,
             "profile_image_url": profile_image_url,
             "profile_banner_url": banner_url,
+            "verified": bool(user.get("blue")),
             "followers_count": _optional_int(user.get("followersCount")),
             "following_count": _optional_int(user.get("friendsCount")),
             "joined_at": user.get("created") or None,
@@ -605,6 +609,7 @@ def _empty_account_profile() -> dict[str, Any]:
         "location": None,
         "profile_image_url": None,
         "profile_banner_url": None,
+        "verified": False,
         "followers_count": None,
         "following_count": None,
         "joined_at": None,

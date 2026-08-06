@@ -40,7 +40,7 @@ export function ArchiveSidebar({
         <nav className="x-sidebar-nav" aria-label="主导航">
           <Link to="/" className={`x-sidebar-item ${pathname === "/" ? "is-active" : ""}`}><FiHome /><span>主页</span></Link>
           <button type="button" className="x-sidebar-item"><FiSearch /><span>搜索</span></button>
-          <a href={profilePath} className={`x-sidebar-item ${pathname.startsWith("/accounts/") ? "is-active" : ""}`}><FiUsers /><span>归档账号</span></a>
+          <Link to="/accounts" className={`x-sidebar-item ${pathname === "/accounts" ? "is-active" : ""}`}><FiUsers /><span>归档账号</span></Link>
           <a href={`${profilePath}#media`} className="x-sidebar-item"><FiImage /><span>媒体库</span></a>
           <Link to="/sync-runs" className={`x-sidebar-item ${pathname === "/sync-runs" ? "is-active" : ""}`}><FiActivity /><span>同步记录</span></Link>
           {account

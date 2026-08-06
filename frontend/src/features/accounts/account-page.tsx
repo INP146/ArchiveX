@@ -56,7 +56,7 @@ export function AccountPage() {
   return (
     <div className="x-profile-column">
         <header className="x-profile-header">
-          <Link to="/" className="x-icon-button" aria-label="返回归档总览"><FiArrowLeft /></Link>
+          <Link to="/accounts" className="x-icon-button" aria-label="返回归档账号列表"><FiArrowLeft /></Link>
           <div className="x-header-copy">
             <strong>{profile.display_name ?? profile.username}</strong>
             <span>{formatCount(profile.post_count)} 帖子</span>

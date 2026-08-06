@@ -9,12 +9,13 @@ export interface AccountSummary {
   last_sync_at: string | null;
   last_error: string | null;
   post_count: number;
+  description: string | null;
+  profile_image_url: string | null;
+  verified: boolean;
 }
 
 export interface Account extends AccountSummary {
-  description: string | null;
   location: string | null;
-  profile_image_url: string | null;
   profile_banner_url: string | null;
   followers_count: number | null;
   following_count: number | null;

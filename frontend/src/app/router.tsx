@@ -10,6 +10,7 @@ import {
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { AccountPage } from "../features/accounts/account-page";
+import { AccountsPage } from "../features/accounts/accounts-page";
 import { LoginPage } from "../features/auth/login-page";
 import { DashboardPage } from "../features/dashboard/dashboard-page";
 import { SyncRunsPage } from "../features/sync-runs/sync-runs-page";
@@ -50,13 +51,19 @@ const accountRoute = createRoute({
   component: AccountPage
 });
 
+const accountsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/accounts",
+  component: AccountsPage
+});
+
 const syncRunsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sync-runs",
   component: SyncRunsPage
 });
 
-const routeTree = rootRoute.addChildren([dashboardRoute, loginRoute, accountRoute, syncRunsRoute]);
+const routeTree = rootRoute.addChildren([dashboardRoute, loginRoute, accountsRoute, accountRoute, syncRunsRoute]);
 
 export const router = createRouter({
   routeTree,
