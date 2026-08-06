@@ -2,6 +2,7 @@
 
 - Source visual truth: user-provided X post screenshot in the current conversation.
 - Focused source truth: user-provided 1084 x 64 action-row crop in the current conversation.
+- Reply source truth: user-provided 1192 x 246 reply-post crop in the current conversation.
 - Source pixels: 1192 x 1386, interpreted as a 596 x 693 CSS-pixel capture at device scale factor 2.
 - Implementation: ArchiveX account route `/accounts/1`, first visible archived post after scrolling past the profile header.
 - Intended implementation viewport: 600px account column at device scale factor 1; responsive check at 390 x 844 CSS pixels.
@@ -34,6 +35,7 @@
 - Colors and visual tokens: existing X dark tokens retained (`#000`, `#e7e9ea`, `#71767b`, `#1d9bf0`, `#536471`); rendered comparison blocked.
 - Image quality and asset fidelity: original archived media and original author avatar are used; media ratio, poster, and duration enhancements were explicitly rolled back; remote asset rendering blocked.
 - Copy and content: repost attribution, original author identity, media-link cleanup, relative time, translation eligibility, AI label support, and engagement metrics are present; rendered comparison blocked.
+- Reply copy and hierarchy: replies expose the target username from the raw payload, render `回复 @username` as a separate muted/blue line, and use `displayTextRange` so the leading mention is not repeated in the body; rendered comparison blocked.
 
 **Implementation Checklist**
 
@@ -48,6 +50,8 @@
 - First correction: body geometry was aligned to X's 40px avatar plus 8px gap; repost attribution precedes the author row; original author, verification, and cleaned copy come from raw archived payloads.
 - Action-row correction: removed the flexible spacer that compressed metrics into the left half. Reply, repost, like, and views now occupy four equal tracks; bookmark and share use fixed 36px tracks at the right edge.
 - Scope rollback: removed video aspect ratio, poster, and duration fields from storage presentation, API responses, frontend types, and media rendering.
+- Reply correction: replaced the generic `回复帖子` label with the actual target account, increased it to the source's 15px line treatment, and separated the reply mention from the visible body using the archived `displayTextRange`.
+- Repost regression correction: the reply-specific article class initially reused the `.x-post-repost` name used by the repost attribution row, causing the entire repost article to inherit the row grid. Article type styling is now applied only as `.x-post-reply`, leaving `.x-post-repost` scoped to the attribution row.
 - Post-fix visual evidence: blocked because no supported browser capture surface is available.
 
 **Follow-up Polish**

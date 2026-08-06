@@ -30,6 +30,7 @@ export interface ArchivedPost {
   author_profile_image_url: string | null;
   author_verified: boolean;
   reposted_by_display_name: string | null;
+  reply_to_username: string | null;
   language: string | null;
   is_translatable: boolean;
   is_ai_generated: boolean;

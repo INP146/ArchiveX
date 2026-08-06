@@ -70,6 +70,7 @@
 .x-tabs button.is-active span::after { position: absolute; right: 30%; bottom: 0; left: 30%; height: 4px; border-radius: 4px; background: var(--x-accent); content: ""; }
 
 .x-post { padding: 8px 16px 3px; border-bottom: 1px solid var(--x-border); transition: background .15s ease; }
+.x-post-reply { padding-top: 11px; }
 .x-post:hover { background: rgba(255, 255, 255, .025); }
 .x-post-repost { display: grid; min-height: 20px; grid-template-columns: 40px minmax(0, 1fr); gap: 8px; align-items: center; margin-bottom: 2px; color: var(--x-muted); font-size: 13px; font-weight: 700; line-height: 16px; }
 .x-post-repost svg { width: 16px; height: 16px; justify-self: end; stroke-width: 2.4; }
@@ -85,7 +86,9 @@
 .x-post-tools { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; margin-top: -2px; color: var(--x-muted); }
 .x-post-tools a { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; color: inherit; font-size: 18px; }
 .x-post-tools a:hover { background: rgba(29, 155, 240, .1); color: var(--x-accent); }
-.x-post-context { margin: 1px 0 3px; color: var(--x-muted); font-size: 13px; line-height: 18px; }
+.x-post-context { display: flex; min-height: 20px; align-items: center; gap: 4px; margin: 5px 0 3px; color: var(--x-muted); font-size: 15px; line-height: 20px; }
+.x-post-context a { color: var(--x-accent); }
+.x-post-context a:hover { text-decoration: underline; }
 .x-post-translation { display: flex; min-height: 24px; align-items: center; gap: 6px; color: var(--x-muted); font-size: 13px; line-height: 18px; }
 .x-post-translation svg { width: 17px; height: 17px; flex: 0 0 17px; }
 .x-post-translation a { color: var(--x-accent); }

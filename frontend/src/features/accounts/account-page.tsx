@@ -127,7 +127,7 @@ function PostItem({ post }: { post: ArchivedPost }) {
     ? formatLanguage(post.language)
     : null;
   return (
-    <article className="x-post">
+    <article className={post.post_type === "reply" ? "x-post x-post-reply" : "x-post"}>
       {post.reposted_by_display_name && (
         <div className="x-post-repost">
           <FiRepeat aria-hidden="true" />
@@ -158,7 +158,16 @@ function PostItem({ post }: { post: ArchivedPost }) {
               </a>
             </div>
           </div>
-          {post.post_type === "reply" && <div className="x-post-context">回复帖子</div>}
+          {post.post_type === "reply" && (
+            <div className="x-post-context">
+              <span>回复</span>
+              {post.reply_to_username && (
+                <a href={`https://x.com/${post.reply_to_username}`} target="_blank" rel="noreferrer">
+                  @{post.reply_to_username}
+                </a>
+              )}
+            </div>
+          )}
           {post.is_translatable && translationLanguage && (
             <div className="x-post-translation">
               <HiOutlineTranslate aria-hidden="true" />

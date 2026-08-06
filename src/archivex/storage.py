@@ -303,11 +303,15 @@ class ArchiveRepository:
         content = retweeted if isinstance(retweeted, dict) else payload
         author = content.get("user") if isinstance(content.get("user"), dict) else {}
         reposter = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        replied_to = content.get("inReplyToUser")
+        replied_to = replied_to if isinstance(replied_to, dict) else {}
         profile_image_url = author.get("profileImageUrl")
         if isinstance(profile_image_url, str):
             profile_image_url = profile_image_url.replace("_normal.", "_400x400.")
         return {
-            "display_text": _display_text(content.get("rawContent")),
+            "display_text": _display_text(
+                content.get("rawContent"), content.get("displayTextRange")
+            ),
             "author_display_name": (
                 author.get("displayname") or author.get("displayName") or author.get("username")
             ),
@@ -317,6 +321,7 @@ class ArchiveRepository:
             "reposted_by_display_name": (
                 reposter.get("displayname") or reposter.get("displayName") or reposter.get("username")
             ) if isinstance(retweeted, dict) else None,
+            "reply_to_username": content.get("inReplyToScreenName") or replied_to.get("username"),
             "language": content.get("lang") or payload.get("lang"),
             "is_translatable": bool(
                 content.get("isTranslatable", payload.get("isTranslatable", False))
@@ -581,9 +586,16 @@ def _optional_int(value: Any) -> int | None:
         return None
 
 
-def _display_text(value: Any) -> str:
+def _display_text(value: Any, display_range: Any = None) -> str:
     if not isinstance(value, str):
         return ""
+    if (
+        isinstance(display_range, list) and len(display_range) == 2
+        and all(isinstance(item, int) for item in display_range)
+    ):
+        start, end = display_range
+        if 0 <= start <= end <= len(value):
+            value = value[start:end]
     return re.sub(r"(?:\s*https://t\.co/[A-Za-z0-9]+)+\s*$", "", value).strip()
 
 

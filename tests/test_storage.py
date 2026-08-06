@@ -56,3 +56,23 @@ def test_media_and_sync_runs_are_persisted(tmp_path) -> None:
     assert run[0] == "success"
     assert run[1]
     assert run[2] == 1
+
+
+def test_reply_presentation_includes_target_account(tmp_path) -> None:
+    repository, _, _ = _repository(tmp_path)
+    account = repository.upsert_account("42", "example")
+    repository.upsert_post(PostInput(
+        "101", account.id, account.username, "reply", "Yup",
+        datetime(2026, 8, 5, tzinfo=UTC), "https://x.com/example/status/101",
+        {
+            "rawContent": "@Rothmus Yup",
+            "displayTextRange": [9, 12],
+            "inReplyToScreenName": "Rothmus",
+            "user": {"displayname": "Example", "username": "example"},
+        },
+    ))
+
+    presentation = repository.post_presentation("101")
+
+    assert presentation["reply_to_username"] == "Rothmus"
+    assert presentation["display_text"] == "Yup"
