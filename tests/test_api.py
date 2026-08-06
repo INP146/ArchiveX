@@ -29,11 +29,14 @@ def test_archive_api_requires_authentication_and_returns_archived_data(tmp_path)
             "100", account.id, account.username, "original", "A useful archive post",
             datetime(2026, 8, 5, 12, tzinfo=UTC), "https://x.com/example/status/100", {
                 "id": "100", "replyCount": 2, "retweetCount": 3, "likeCount": 4, "viewCount": 5,
+                "rawContent": "A useful archive post https://t.co/media", "lang": "en",
+                "isTranslatable": True,
                 "user": {
                     "rawDescription": "Archived biography", "location": "Shanghai",
                     "profileImageUrl": "https://example.test/avatar_normal.jpg",
                     "profileBannerUrl": "https://example.test/banner", "followersCount": 12,
                     "friendsCount": 7, "created": "2024-01-01 00:00:00+00:00",
+                    "displayname": "Example", "username": "example", "blue": True,
                 },
             },
         ))
@@ -54,6 +57,10 @@ def test_archive_api_requires_authentication_and_returns_archived_data(tmp_path)
         assert posts.status_code == 200
         assert posts.json()[0]["tweet_id"] == "100"
         assert posts.json()[0]["like_count"] == 4
+        assert posts.json()[0]["display_text"] == "A useful archive post"
+        assert posts.json()[0]["author_display_name"] == "Example"
+        assert posts.json()[0]["author_verified"] is True
+        assert posts.json()[0]["language"] == "en"
         detail = client.get("/api/posts/100", headers=headers)
         assert detail.status_code == 200
         assert detail.json()["media"] == [{

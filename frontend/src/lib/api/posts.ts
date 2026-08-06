@@ -24,6 +24,15 @@ export interface ArchivedPost {
   repost_count: number | null;
   like_count: number | null;
   view_count: number | null;
+  display_text: string;
+  author_display_name: string | null;
+  author_username: string | null;
+  author_profile_image_url: string | null;
+  author_verified: boolean;
+  reposted_by_display_name: string | null;
+  language: string | null;
+  is_translatable: boolean;
+  is_ai_generated: boolean;
   media: PostMedia[];
 }
 

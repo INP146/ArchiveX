@@ -297,6 +297,36 @@ class ArchiveRepository:
             "view_count": _optional_int(payload.get("viewCount")),
         }
 
+    def post_presentation(self, tweet_id: str) -> dict[str, Any]:
+        payload = self._post_payload(tweet_id)
+        retweeted = payload.get("retweetedTweet")
+        content = retweeted if isinstance(retweeted, dict) else payload
+        author = content.get("user") if isinstance(content.get("user"), dict) else {}
+        reposter = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        profile_image_url = author.get("profileImageUrl")
+        if isinstance(profile_image_url, str):
+            profile_image_url = profile_image_url.replace("_normal.", "_400x400.")
+        return {
+            "display_text": _display_text(content.get("rawContent")),
+            "author_display_name": (
+                author.get("displayname") or author.get("displayName") or author.get("username")
+            ),
+            "author_username": author.get("username"),
+            "author_profile_image_url": profile_image_url,
+            "author_verified": bool(author.get("verified") or author.get("blue")),
+            "reposted_by_display_name": (
+                reposter.get("displayname") or reposter.get("displayName") or reposter.get("username")
+            ) if isinstance(retweeted, dict) else None,
+            "language": content.get("lang") or payload.get("lang"),
+            "is_translatable": bool(
+                content.get("isTranslatable", payload.get("isTranslatable", False))
+            ),
+            "is_ai_generated": bool(
+                content.get("isAiGenerated") or content.get("isAIGenerated")
+                or payload.get("isAiGenerated") or payload.get("isAIGenerated")
+            ),
+        }
+
     def list_sync_runs(self, *, account_id: int | None = None, limit: int = 50,
                        offset: int = 0) -> list[SyncRun]:
         where = "WHERE sync_runs.account_id = ?" if account_id is not None else ""
@@ -549,6 +579,12 @@ def _optional_int(value: Any) -> int | None:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _display_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"(?:\s*https://t\.co/[A-Za-z0-9]+)+\s*$", "", value).strip()
 
 
 def _empty_account_profile() -> dict[str, Any]:

@@ -1,20 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
+import { BsPatchCheckFill } from "react-icons/bs";
 import {
   FiArrowLeft,
   FiBarChart2,
   FiBookmark,
   FiCalendar,
-  FiExternalLink,
   FiHeart,
   FiMapPin,
   FiMessageCircle,
   FiMoreHorizontal,
   FiRepeat,
   FiShare,
+  FiUpload,
   FiUser
 } from "react-icons/fi";
+import { HiOutlineTranslate } from "react-icons/hi";
+import { TbSparkles } from "react-icons/tb";
 
 import { getAccount } from "../../lib/api/accounts";
 import { ApiError } from "../../lib/api/client";
@@ -106,7 +109,7 @@ export function AccountPage() {
           {!posts.isPending && !posts.error && visiblePosts.length === 0 && (
             <div className="x-timeline-state">这个分类下还没有归档内容。</div>
           )}
-          {visiblePosts.map((post) => <PostItem key={post.tweet_id} post={post} avatarUrl={profile.profile_image_url} displayName={profile.display_name ?? profile.username} />)}
+          {visiblePosts.map((post) => <PostItem key={post.tweet_id} post={post} />)}
         </section>
     </div>
   );
@@ -116,34 +119,66 @@ function TabButton({ active, children, onClick }: { active: boolean; children: s
   return <button type="button" className={active ? "is-active" : ""} onClick={onClick}><span>{children}</span></button>;
 }
 
-function PostItem({ post, avatarUrl, displayName }: { post: ArchivedPost; avatarUrl: string | null; displayName: string }) {
+function PostItem({ post }: { post: ArchivedPost }) {
+  const authorName = post.author_display_name ?? post.author_username ?? post.username;
+  const authorUsername = post.author_username ?? post.username;
+  const avatarUrl = post.author_profile_image_url;
+  const translationLanguage = post.language && !isChineseLanguage(post.language)
+    ? formatLanguage(post.language)
+    : null;
   return (
     <article className="x-post">
-      <div className="x-avatar x-avatar-post">
-        {avatarUrl ? <img src={avatarUrl} alt="" /> : <FiUser aria-hidden="true" />}
-      </div>
-      <div className="x-post-body">
-        <div className="x-post-heading">
-          <div className="x-post-author">
-            <strong>{displayName}</strong>
-            <span>@{post.username}</span>
-            <span>·</span>
-            <time dateTime={post.posted_at}>{formatPostDate(post.posted_at)}</time>
-          </div>
-          <a href={post.permalink} target="_blank" rel="noreferrer" aria-label="打开原帖"><FiMoreHorizontal /></a>
+      {post.reposted_by_display_name && (
+        <div className="x-post-repost">
+          <FiRepeat aria-hidden="true" />
+          <span>{post.reposted_by_display_name} 已转帖</span>
         </div>
-        {post.post_type === "reply" && <div className="x-post-context">回复帖子</div>}
-        {post.post_type === "repost" && <div className="x-post-context">已转帖</div>}
-        <p className="x-post-text">{post.text}</p>
-        {post.media.length > 0 && <MediaGrid media={post.media} />}
-        <div className="x-post-actions" aria-label="帖子数据">
-          <PostMetric icon={<FiMessageCircle />} value={post.reply_count} label="回复" />
-          <PostMetric icon={<FiRepeat />} value={post.repost_count} label="转帖" />
-          <PostMetric icon={<FiHeart />} value={post.like_count} label="喜欢" />
-          <PostMetric icon={<FiBarChart2 />} value={post.view_count} label="查看" />
-          <span className="x-post-action-spacer" />
-          <button type="button" aria-label="收藏"><FiBookmark /></button>
-          <a href={post.permalink} target="_blank" rel="noreferrer" aria-label="打开原帖"><FiExternalLink /></a>
+      )}
+      <div className="x-post-main">
+        <div className="x-avatar x-avatar-post">
+          {avatarUrl ? <img src={avatarUrl} alt="" /> : <FiUser aria-hidden="true" />}
+        </div>
+        <div className="x-post-body">
+          <div className="x-post-heading">
+            <div className="x-post-author">
+              <strong>{authorName}</strong>
+              {post.author_verified && <BsPatchCheckFill className="x-verified" aria-label="已认证" />}
+              <span className="x-post-handle">@{authorUsername}</span>
+              <span>·</span>
+              <time dateTime={post.posted_at}>{formatPostDate(post.posted_at)}</time>
+            </div>
+            <div className="x-post-tools">
+              {post.is_translatable && translationLanguage && (
+                <a href={post.permalink} target="_blank" rel="noreferrer" aria-label="在 X 上翻译" title="翻译帖子">
+                  <HiOutlineTranslate />
+                </a>
+              )}
+              <a href={post.permalink} target="_blank" rel="noreferrer" aria-label="打开原帖菜单" title="更多">
+                <FiMoreHorizontal />
+              </a>
+            </div>
+          </div>
+          {post.post_type === "reply" && <div className="x-post-context">回复帖子</div>}
+          {post.is_translatable && translationLanguage && (
+            <div className="x-post-translation">
+              <HiOutlineTranslate aria-hidden="true" />
+              <span>翻译自 {translationLanguage}</span>
+              <a href={post.permalink} target="_blank" rel="noreferrer">在 X 上翻译</a>
+            </div>
+          )}
+          {post.display_text && <p className="x-post-text">{post.display_text}</p>}
+          {post.media.length > 0 && <MediaGrid media={post.media} />}
+          {post.is_ai_generated && (
+            <div className="x-post-ai-label"><TbSparkles aria-hidden="true" />由 AI 生成</div>
+          )}
+          <div className="x-post-actions" aria-label="帖子数据">
+            <PostMetric icon={<FiMessageCircle />} value={post.reply_count} label="回复" />
+            <PostMetric icon={<FiRepeat />} value={post.repost_count} label="转帖" />
+            <PostMetric icon={<FiHeart />} value={post.like_count} label="喜欢" />
+            <PostMetric icon={<FiBarChart2 />} value={post.view_count} label="查看" />
+            <button className="x-post-utility" type="button" aria-label="收藏" title="收藏"><FiBookmark /></button>
+            <a className="x-post-utility" href={post.permalink} target="_blank" rel="noreferrer" aria-label="分享原帖" title="分享"><FiUpload /></a>
+          </div>
         </div>
       </div>
     </article>
@@ -163,7 +198,7 @@ function MediaGrid({ media }: { media: PostMedia[] }) {
 }
 
 function PostMetric({ icon, value, label }: { icon: React.ReactNode; value: number | null; label: string }) {
-  return <button type="button" aria-label={label}>{icon}{value !== null && <span>{formatCount(value)}</span>}</button>;
+  return <button className="x-post-metric" type="button" aria-label={label}>{icon}{value !== null && <span>{formatCount(value)}</span>}</button>;
 }
 
 function PageState({ message }: { message: string }) {
@@ -190,5 +225,24 @@ function formatJoined(value: string) {
 }
 
 function formatPostDate(value: string) {
-  return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(value));
+  const date = new Date(value);
+  const elapsedMs = Math.max(0, Date.now() - date.getTime());
+  const elapsedMinutes = Math.floor(elapsedMs / 60_000);
+  if (elapsedMinutes < 1) return "刚刚";
+  if (elapsedMinutes < 60) return `${elapsedMinutes}分钟`;
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `${elapsedHours}小时`;
+  return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(date);
+}
+
+function formatLanguage(code: string) {
+  try {
+    return new Intl.DisplayNames(["zh-CN"], { type: "language" }).of(code) ?? code;
+  } catch {
+    return code;
+  }
+}
+
+function isChineseLanguage(code: string) {
+  return code.toLowerCase() === "zh" || code.toLowerCase().startsWith("zh-");
 }

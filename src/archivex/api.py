@@ -135,6 +135,10 @@ def _require_token(expected_token: str):
 def _post_response(post: Any, repository: ArchiveRepository) -> dict[str, Any]:
     response = post.__dict__.copy()
     response.update(repository.post_metrics(post.tweet_id))
+    presentation = repository.post_presentation(post.tweet_id)
+    if not presentation["display_text"] and not presentation["author_username"]:
+        presentation["display_text"] = post.text
+    response.update(presentation)
     response["media"] = [_media_response(media) for media in repository.post_media(post.tweet_id)]
     return response
 
