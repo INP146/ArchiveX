@@ -3,7 +3,7 @@
   height: 100vh;
   overflow-y: auto;
   overflow-x: hidden;
-  overscroll-behavior: contain;
+  overscroll-behavior: none;
   -ms-overflow-style: none;
   scrollbar-width: none;
   background: #000;
