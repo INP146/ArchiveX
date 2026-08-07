@@ -1,0 +1,13 @@
+.x-home-tabs {
+  position: sticky;
+  z-index: 20;
+  top: 0;
+  grid-template-columns: 1fr;
+  background: rgba(0, 0, 0, .88);
+  backdrop-filter: blur(12px);
+}
+
+.x-home-tabs button.is-active span::after {
+  right: calc(50% - 32px);
+  left: calc(50% - 32px);
+}

@@ -39,14 +39,14 @@ export interface ArchivedPost {
 
 export type AccountTimelineTab = "posts" | "replies" | "media";
 
-export const ACCOUNT_POSTS_PAGE_SIZE = 50;
+export const POSTS_PAGE_SIZE = 50;
 
-export function getAccountPosts(accountId: string, tab: AccountTimelineTab, offset: number) {
+export function getTimelinePosts(tab: AccountTimelineTab, offset: number, accountId?: string) {
   const query = new URLSearchParams({
-    account_id: accountId,
-    limit: String(ACCOUNT_POSTS_PAGE_SIZE),
+    limit: String(POSTS_PAGE_SIZE),
     offset: String(offset)
   });
+  if (accountId !== undefined) query.set("account_id", accountId);
   if (tab === "posts") query.set("exclude_post_type", "reply");
   if (tab === "replies") query.set("post_type", "reply");
   if (tab === "media") query.set("has_media", "true");
