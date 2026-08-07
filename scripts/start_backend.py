@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Start the ArchiveX backend development server."""
-import subprocess
+import os
 import sys
 from pathlib import Path
 
@@ -22,8 +22,11 @@ def main() -> None:
         print("  pip install -e .", file=sys.stderr)
         sys.exit(1)
 
-    print("Starting ArchiveX backend...")
-    subprocess.run([str(archivex_cmd)], cwd=project_root)
+    print("Starting ArchiveX backend...", flush=True)
+    env = os.environ.copy()
+    env["PATH"] = os.pathsep.join((str(venv_path / "bin"), env.get("PATH", "")))
+    os.chdir(project_root)
+    os.execve(archivex_cmd, [str(archivex_cmd)], env)
 
 
 if __name__ == "__main__":

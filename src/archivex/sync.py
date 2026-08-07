@@ -66,6 +66,8 @@ class ArchiveSyncService:
         is_initial_sync = account.last_sync_at is None
         consecutive_known_posts = 0
         try:
+            if self.media_enabled and self.media_downloader is not None:
+                await self._retry_failed_media(account.id)
             media_new += await self._backfill_media()
             async for post in self.source.fetch_timeline(account.x_user_id):
                 if is_initial_sync and 0 <= self.initial_post_limit <= posts_seen:
@@ -128,6 +130,10 @@ class ArchiveSyncService:
                 message = str(exc) or exc.__class__.__name__
                 self.repository.fail_media(media.id, message)
                 logger.warning("Media download failed for archived post %s", tweet_id)
+
+    async def _retry_failed_media(self, account_id: int) -> None:
+        for tweet_id in self.repository.failed_media_post_ids(account_id):
+            await self._download_post_media(tweet_id)
 
     async def _backfill_media(self) -> int:
         media_new = 0

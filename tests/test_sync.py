@@ -165,6 +165,30 @@ def test_failed_media_download_is_recorded_without_failing_post_sync(tmp_path) -
     assert error == "media server unavailable"
 
 
+def test_failed_media_is_retried_when_post_is_absent_from_later_timeline(tmp_path) -> None:
+    account = SourceAccount("1", "first", "First")
+    post = SourcePost("2", "1", "first", "original", "post", datetime(2026, 8, 5, tzinfo=UTC),
+                      "https://x.com/first/status/2", {"id": "2"},
+                      (SourceMedia("image", "https://pbs.twimg.com/media/example.jpg"),))
+    source = FakeSource({"first": account}, {"1": [post]})
+    downloader = FakeDownloader(should_fail=True)
+    service = _service(tmp_path, source, downloader=downloader)
+    asyncio.run(service.sync_account("first"))
+
+    source.posts["1"] = []
+    downloader.should_fail = False
+    result = asyncio.run(service.sync_account("first"))
+
+    assert result.status == "success"
+    assert len(downloader.calls) == 2
+    with sqlite3.connect(tmp_path / "archive.sqlite3") as connection:
+        status, error = connection.execute(
+            "SELECT download_status, error FROM media"
+        ).fetchone()
+    assert status == "completed"
+    assert error is None
+
+
 def test_existing_posts_are_backfilled_from_their_raw_payload(tmp_path) -> None:
     account = SourceAccount("1", "first", "First")
     source = FakeSource({"first": account}, {"1": []})

@@ -450,6 +450,17 @@ class ArchiveRepository:
             ).fetchall()
         return [MediaRecord(**dict(row)) for row in rows]
 
+    def failed_media_post_ids(self, account_id: int) -> list[str]:
+        with _connect(self.database_path) as connection:
+            rows = connection.execute(
+                """SELECT DISTINCT media.tweet_id FROM media
+                JOIN posts ON posts.tweet_id = media.tweet_id
+                WHERE posts.account_id = ? AND media.download_status = 'failed'
+                ORDER BY media.tweet_id""",
+                (account_id,),
+            ).fetchall()
+        return [str(row["tweet_id"]) for row in rows]
+
     def post_directory(self, tweet_id: str) -> Path:
         with _connect(self.database_path) as connection:
             row = connection.execute(
