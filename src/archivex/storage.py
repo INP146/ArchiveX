@@ -226,7 +226,9 @@ class ArchiveRepository:
 
     def list_posts(self, *, account_id: int | None = None, query: str | None = None,
                    from_at: datetime | None = None, to_at: datetime | None = None,
-                   has_media: bool | None = None, limit: int = 50, offset: int = 0) -> list[ArchivedPost]:
+                   has_media: bool | None = None, post_type: str | None = None,
+                   exclude_post_type: str | None = None, limit: int = 50,
+                   offset: int = 0) -> list[ArchivedPost]:
         clauses: list[str] = []
         parameters: list[Any] = []
         if account_id is not None:
@@ -245,6 +247,12 @@ class ArchiveRepository:
             clauses.append("EXISTS (SELECT 1 FROM media WHERE media.tweet_id = posts.tweet_id)")
         elif has_media is False:
             clauses.append("NOT EXISTS (SELECT 1 FROM media WHERE media.tweet_id = posts.tweet_id)")
+        if post_type is not None:
+            clauses.append("posts.post_type = ?")
+            parameters.append(post_type)
+        if exclude_post_type is not None:
+            clauses.append("posts.post_type != ?")
+            parameters.append(exclude_post_type)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with _connect(self.database_path) as connection:
             rows = connection.execute(

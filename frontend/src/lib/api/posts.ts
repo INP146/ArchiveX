@@ -37,7 +37,18 @@ export interface ArchivedPost {
   media: PostMedia[];
 }
 
-export function getAccountPosts(accountId: string) {
-  const query = new URLSearchParams({ account_id: accountId, limit: "50" });
+export type AccountTimelineTab = "posts" | "replies" | "media";
+
+export const ACCOUNT_POSTS_PAGE_SIZE = 50;
+
+export function getAccountPosts(accountId: string, tab: AccountTimelineTab, offset: number) {
+  const query = new URLSearchParams({
+    account_id: accountId,
+    limit: String(ACCOUNT_POSTS_PAGE_SIZE),
+    offset: String(offset)
+  });
+  if (tab === "posts") query.set("exclude_post_type", "reply");
+  if (tab === "replies") query.set("post_type", "reply");
+  if (tab === "media") query.set("has_media", "true");
   return apiFetch<ArchivedPost[]>(`/api/posts?${query}`);
 }

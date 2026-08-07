@@ -114,6 +114,9 @@
 .x-post-metric { min-width: 0; flex: 1 1 0; }
 .x-post-utility { flex: 0 0 36px; justify-content: center; }
 .x-timeline-state, .x-page-state { padding: 32px 20px; color: var(--x-muted); text-align: center; }
+.x-timeline-more { display: flex; min-height: 52px; align-items: center; justify-content: center; gap: 12px; padding: 14px 20px; font-size: 14px; }
+.x-timeline-more button { color: var(--x-accent); font-weight: 700; }
+.x-timeline-more button:hover { text-decoration: underline; }
 .x-page-state { display: grid; align-content: center; gap: 12px; }
 .x-page-state a { color: var(--x-accent); }
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import secrets
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
@@ -11,6 +11,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from archivex.storage import ArchiveMedia, ArchiveRepository
+
+PostType = Literal["original", "reply", "repost", "quote"]
 
 
 class SessionLoginRequest(BaseModel):
@@ -70,6 +72,8 @@ def create_api_router(repository: ArchiveRepository, auth_token: str) -> APIRout
         from_at: Annotated[datetime | None, Query(alias="from")] = None,
         to_at: Annotated[datetime | None, Query(alias="to")] = None,
         has_media: bool | None = None,
+        post_type: PostType | None = None,
+        exclude_post_type: PostType | None = None,
         limit: int = Query(default=50, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
     ) -> list[dict[str, Any]]:
@@ -77,7 +81,8 @@ def create_api_router(repository: ArchiveRepository, auth_token: str) -> APIRout
             raise HTTPException(status_code=422, detail="from must be before or equal to to")
         posts = repository.list_posts(
             account_id=account_id, query=q, from_at=from_at, to_at=to_at,
-            has_media=has_media, limit=limit, offset=offset,
+            has_media=has_media, post_type=post_type, exclude_post_type=exclude_post_type,
+            limit=limit, offset=offset,
         )
         return [_post_response(post, repository) for post in posts]
 

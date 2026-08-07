@@ -105,6 +105,40 @@ def test_browser_session_authentication_does_not_expose_the_token(tmp_path) -> N
         assert client.get("/api/accounts").status_code == 401
 
 
+def test_archive_api_filters_post_types_and_paginates(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    with TestClient(create_app(settings)) as client:
+        repository = ArchiveRepository(settings.archive_db_path, settings.archive_data_dir)
+        account = repository.upsert_account("42", "example")
+        post_types = ["original", "reply", "quote", "reply", "repost"]
+        for index, post_type in enumerate(post_types):
+            tweet_id = str(100 + index)
+            repository.upsert_post(PostInput(
+                tweet_id, account.id, account.username, post_type, f"Post {tweet_id}",
+                datetime(2026, 8, 5, 12, index, tzinfo=UTC),
+                f"https://x.com/example/status/{tweet_id}", {},
+            ))
+
+        headers = {"Authorization": "Bearer test-token"}
+        first_posts_page = client.get(
+            f"/api/posts?account_id={account.id}&exclude_post_type=reply&limit=2",
+            headers=headers,
+        )
+        second_posts_page = client.get(
+            f"/api/posts?account_id={account.id}&exclude_post_type=reply&limit=2&offset=2",
+            headers=headers,
+        )
+        replies = client.get(
+            f"/api/posts?account_id={account.id}&post_type=reply&limit=2",
+            headers=headers,
+        )
+
+        assert [post["tweet_id"] for post in first_posts_page.json()] == ["104", "102"]
+        assert [post["tweet_id"] for post in second_posts_page.json()] == ["100"]
+        assert [post["tweet_id"] for post in replies.json()] == ["103", "101"]
+        assert client.get("/api/posts?post_type=unknown", headers=headers).status_code == 422
+
+
 def test_archive_api_serves_completed_media_only(tmp_path) -> None:
     settings = _settings(tmp_path)
     with TestClient(create_app(settings)) as client:

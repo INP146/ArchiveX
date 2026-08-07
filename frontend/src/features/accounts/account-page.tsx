@@ -1,6 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BsPatchCheckFill } from "react-icons/bs";
 import {
   FiArrowLeft,
@@ -21,14 +21,19 @@ import { TbSparkles } from "react-icons/tb";
 
 import { getAccount } from "../../lib/api/accounts";
 import { ApiError } from "../../lib/api/client";
-import { ArchivedPost, getAccountPosts, PostMedia } from "../../lib/api/posts";
+import {
+  ACCOUNT_POSTS_PAGE_SIZE,
+  AccountTimelineTab,
+  ArchivedPost,
+  getAccountPosts,
+  PostMedia
+} from "../../lib/api/posts";
 import "./account-page.css";
-
-type TimelineTab = "posts" | "replies" | "media";
 
 export function AccountPage() {
   const { accountId } = useParams({ from: "/accounts/$accountId" });
-  const [activeTab, setActiveTab] = useState<TimelineTab>(() => window.location.hash === "#media" ? "media" : "posts");
+  const [activeTab, setActiveTab] = useState<AccountTimelineTab>(() => window.location.hash === "#media" ? "media" : "posts");
+  const timelineEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const syncTabFromHash = () => setActiveTab(window.location.hash === "#media" ? "media" : "posts");
     window.addEventListener("hashchange", syncTabFromHash);
@@ -38,16 +43,32 @@ export function AccountPage() {
     queryKey: ["account", accountId],
     queryFn: () => getAccount(accountId)
   });
-  const posts = useQuery({
-    queryKey: ["posts", accountId],
-    queryFn: () => getAccountPosts(accountId)
+  const posts = useInfiniteQuery({
+    queryKey: ["posts", accountId, activeTab],
+    queryFn: ({ pageParam }) => getAccountPosts(accountId, activeTab, pageParam),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, pages) => lastPage.length === ACCOUNT_POSTS_PAGE_SIZE
+      ? pages.reduce((total, page) => total + page.length, 0)
+      : undefined
   });
-  const visiblePosts = useMemo(() => {
-    const items = posts.data ?? [];
-    if (activeTab === "replies") return items.filter((post) => post.post_type === "reply");
-    if (activeTab === "media") return items.filter((post) => post.media.length > 0);
-    return items;
-  }, [activeTab, posts.data]);
+  const timelinePosts = useMemo(() => {
+    const uniquePosts = new Map<string, ArchivedPost>();
+    posts.data?.pages.forEach((page) => {
+      page.forEach((post) => uniquePosts.set(post.tweet_id, post));
+    });
+    return [...uniquePosts.values()];
+  }, [posts.data]);
+  const { fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } = posts;
+
+  useEffect(() => {
+    const timelineEnd = timelineEndRef.current;
+    if (account.isPending || !timelineEnd || !hasNextPage || isFetchingNextPage || isFetchNextPageError) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) void fetchNextPage();
+    }, { rootMargin: "400px 0px" });
+    observer.observe(timelineEnd);
+    return () => observer.disconnect();
+  }, [account.isPending, fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError]);
 
   if (account.isPending) return <PageState message="正在读取账号归档..." />;
   if (account.error) return <PageError error={account.error} />;
@@ -105,11 +126,25 @@ export function AccountPage() {
 
         <section aria-live="polite">
           {posts.isPending && <div className="x-timeline-state">正在读取帖子...</div>}
-          {posts.error && <div className="x-timeline-state">帖子加载失败：{posts.error.message}</div>}
-          {!posts.isPending && !posts.error && visiblePosts.length === 0 && (
+          {posts.isError && !posts.isFetchNextPageError && <div className="x-timeline-state">帖子加载失败：{posts.error.message}</div>}
+          {!posts.isPending && !posts.isError && timelinePosts.length === 0 && (
             <div className="x-timeline-state">这个分类下还没有归档内容。</div>
           )}
-          {visiblePosts.map((post) => <PostItem key={post.tweet_id} post={post} />)}
+          {timelinePosts.map((post) => <PostItem key={post.tweet_id} post={post} />)}
+          {posts.isFetchNextPageError && (
+            <div className="x-timeline-state x-timeline-more">
+              <span>更多帖子加载失败</span>
+              <button type="button" onClick={() => void posts.fetchNextPage()}>重试</button>
+            </div>
+          )}
+          {posts.hasNextPage && !posts.isFetchNextPageError && (
+            <div ref={timelineEndRef} className="x-timeline-state x-timeline-more">
+              {posts.isFetchingNextPage ? "正在读取更多帖子..." : null}
+            </div>
+          )}
+          {!posts.hasNextPage && timelinePosts.length > 0 && (
+            <div className="x-timeline-state x-timeline-more">已显示全部帖子</div>
+          )}
         </section>
     </div>
   );

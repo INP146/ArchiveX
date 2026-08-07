@@ -49,7 +49,8 @@ they are independent from the X accounts being archived.
 Protected routes expose archived accounts (`GET /api/accounts`), posts (`GET /api/posts` and
 `GET /api/posts/{tweet_id}`), downloaded media (`GET /api/media/{id}`), and sync
 history (`GET /api/sync-runs`). Post lists support `account_id`, `q`, `from`,
-`to`, `has_media`, `limit`, and `offset` query parameters.
+`to`, `has_media`, `post_type`, `exclude_post_type`, `limit`, and `offset` query
+parameters. Post types are `original`, `reply`, `repost`, and `quote`.
 
 ## Web frontend
 
