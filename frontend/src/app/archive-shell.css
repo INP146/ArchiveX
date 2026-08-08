@@ -15,6 +15,7 @@
 }
 
 .x-app-content {
+  box-sizing: border-box;
   width: 600px;
   height: 100vh;
   overflow-y: auto;
@@ -31,9 +32,6 @@
 .x-profile-column::-webkit-scrollbar {
   display: none;
 }
-.x-empty-rail { }
-.x-empty-rail-right { border-left: 1px solid var(--x-border); }
-
 .x-left-rail {
   display: flex;
   justify-content: flex-end;
@@ -68,7 +66,7 @@
   display: flex;
   width: fit-content;
   max-width: 100%;
-  height: 51px;
+  height: 58px;
   align-items: center;
   gap: 20px;
   padding: 0 15px;

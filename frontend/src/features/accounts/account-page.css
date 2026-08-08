@@ -59,7 +59,9 @@
 .x-archive-toggle { display: inline-flex; height: 36px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border: 1px solid #536471; border-radius: 999px; background: transparent; color: #eff3f4; font-size: 14px; font-weight: 700; text-align: center; }
 .x-archive-toggle:hover { background: rgba(239, 243, 244, .1); }
 .x-archive-toggle svg { width: 16px; height: 16px; }
-.x-identity h1 { margin: 0; font-size: 22px; font-weight: 800; line-height: 26px; }
+.x-identity h1 { display: flex; min-width: 0; align-items: center; gap: 5px; margin: 0; font-size: 22px; font-weight: 800; line-height: 26px; }
+.x-identity h1 span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.x-profile-verified { width: 20px; height: 20px; flex: 0 0 20px; color: var(--x-accent); }
 .x-identity p { margin: 0; color: var(--x-muted); font-size: 15px; }
 .x-bio { margin: 15px 0 0; font-size: 15px; line-height: 20px; white-space: pre-wrap; }
 .x-profile-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 14px; color: var(--x-muted); font-size: 15px; }

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { BsPatchCheckFill } from "react-icons/bs";
 import {
   FiArrowLeft,
   FiCalendar,
@@ -124,7 +125,12 @@ export function AccountPage() {
           </div>
 
           <div className="x-identity">
-            <h1>{displayName}</h1>
+            <h1>
+              <span>{displayName}</span>
+              {profile.verified && (
+                <BsPatchCheckFill className="x-profile-verified" aria-label="已认证" />
+              )}
+            </h1>
             <p>{username ? `@${username}` : `X ID ${profile.x_user_id}`}</p>
           </div>
           {profile.description && <p className="x-bio">{profile.description}</p>}
