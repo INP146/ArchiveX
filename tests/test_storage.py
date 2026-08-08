@@ -70,6 +70,23 @@ def test_media_and_sync_runs_are_persisted(tmp_path) -> None:
     assert run[2] == 1
 
 
+def test_running_sync_runs_are_closed_after_process_interruption(tmp_path) -> None:
+    repository, database_path, _ = _repository(tmp_path)
+    account = repository.upsert_account("42", "example")
+    run_id = repository.start_sync_run(account.x_user_id)
+
+    assert repository.interrupt_running_sync_runs() == 1
+    assert repository.interrupt_running_sync_runs() == 0
+
+    with sqlite3.connect(database_path) as connection:
+        status, finished_at, error = connection.execute(
+            "SELECT status, finished_at, error FROM sync_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+    assert status == "interrupted"
+    assert finished_at is not None
+    assert error == "process stopped before synchronization completed"
+
+
 def test_reply_presentation_includes_target_account(tmp_path) -> None:
     repository, _, _ = _repository(tmp_path)
     account = repository.upsert_account("42", "example")

@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 import sqlite3
 
+import pytest
+
 from archivex.media import DownloadResult
 from archivex.source import SourceAccount, SourceMedia, SourcePost
 from archivex.storage import ArchiveRepository, PostInput, initialize_storage
@@ -171,6 +173,61 @@ def test_incremental_limit_closes_timeline_before_sync_returns(tmp_path) -> None
         assert source.last_timeline.close_called is True
 
     asyncio.run(run_syncs())
+
+
+def test_interrupted_initial_sync_ignores_incremental_known_post_limit(tmp_path) -> None:
+    account = SourceAccount("1", "first", "First")
+    source = FakeSource({"first": account}, {"1": [
+        _post("4", datetime(2026, 8, 4, tzinfo=UTC)),
+        _post("3", datetime(2026, 8, 3, tzinfo=UTC)),
+        _post("2", datetime(2026, 8, 2, tzinfo=UTC)),
+        _post("1", datetime(2026, 8, 1, tzinfo=UTC)),
+    ]})
+    service = _service(tmp_path, source, initial_post_limit=-1,
+                       incremental_known_post_limit=2)
+    for post in source.posts["1"][:3]:
+        service.repository.upsert_post(PostInput(
+            post.tweet_id, post.x_user_id, post.post_type, post.text, post.posted_at,
+            post.permalink, post.raw_payload,
+        ))
+
+    result = asyncio.run(service.sync_account("1"))
+
+    assert (result.status, result.posts_seen, result.posts_new) == ("success", 4, 1)
+    assert service.repository.get_post("1") is not None
+
+
+def test_cancelled_sync_run_is_marked_interrupted(tmp_path) -> None:
+    account = SourceAccount("1", "first", "First")
+
+    class BlockingSource(FakeSource):
+        def __init__(self):
+            super().__init__({"first": account}, {})
+            self.started = asyncio.Event()
+
+        async def fetch_timeline(self, x_user_id: str) -> AsyncIterator[SourcePost]:
+            self.started.set()
+            await asyncio.Event().wait()
+            if False:
+                yield
+
+    source = BlockingSource()
+    service = _service(tmp_path, source, initial_post_limit=-1)
+
+    async def cancel_sync() -> None:
+        task = asyncio.create_task(service.sync_account("1"))
+        await source.started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(cancel_sync())
+
+    run = service.repository.list_sync_runs(account_x_user_id="1")[0]
+    assert run.status == "interrupted"
+    assert run.finished_at is not None
+    assert run.error == "synchronization cancelled"
+    assert service.repository.get_account("1").last_sync_at is None
 
 
 def test_new_media_is_downloaded_and_completed_media_is_not_downloaded_again(tmp_path) -> None:

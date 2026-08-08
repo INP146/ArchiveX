@@ -783,6 +783,18 @@ class ArchiveRepository:
                 (_timestamp(), posts_seen, posts_new, media_new, status, error, run_id),
             )
 
+    def interrupt_running_sync_runs(
+        self, error: str = "process stopped before synchronization completed"
+    ) -> int:
+        """Close sync runs left open by a previous process."""
+        with _connect(self.database_path) as connection:
+            cursor = connection.execute(
+                """UPDATE sync_runs SET finished_at = ?, status = 'interrupted', error = ?
+                WHERE status = 'running' AND finished_at IS NULL""",
+                (_timestamp(), error),
+            )
+        return cursor.rowcount
+
     def _write_raw_post(self, post: PostInput) -> str:
         posted_at = _as_utc(post.posted_at)
         relative_path = (Path("accounts") / _path_component(post.account_x_user_id) / "posts"

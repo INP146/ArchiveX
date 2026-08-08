@@ -113,6 +113,12 @@ class ArchiveSyncService:
                         and consecutive_known_posts >= self.incremental_known_post_limit
                     ):
                         break
+        except asyncio.CancelledError:
+            self.repository.finish_sync_run(
+                run_id, posts_seen=posts_seen, posts_new=posts_new, media_new=media_new,
+                status="interrupted", error="synchronization cancelled"
+            )
+            raise
         except Exception as exc:
             message = str(exc) or exc.__class__.__name__
             self.repository.finish_sync_run(

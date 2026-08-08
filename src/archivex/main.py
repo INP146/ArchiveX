@@ -44,6 +44,12 @@ def create_app(settings: Settings | None = None, post_source: PostSource | None 
             app_settings.archive_data_dir,
             app_settings.twscrape_session_path,
         )
+        interrupted_runs = repository.interrupt_running_sync_runs()
+        if interrupted_runs:
+            logger.warning(
+                "Marked %d unfinished synchronization run(s) as interrupted",
+                interrupted_runs,
+            )
         stop_sync = asyncio.Event()
         sync_task = asyncio.create_task(
             _sync_loop(service, repository, app_settings.archive_sync_interval_seconds, stop_sync),
