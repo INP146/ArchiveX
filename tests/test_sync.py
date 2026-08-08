@@ -29,6 +29,35 @@ class FakeSource:
             yield post
 
 
+class CloseTrackingTimeline:
+    def __init__(self, posts):
+        self.posts = iter(posts)
+        self.close_called = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self.posts)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
+    async def aclose(self) -> None:
+        self.close_called = True
+
+
+class CloseTrackingSource(FakeSource):
+    def __init__(self, accounts, posts):
+        super().__init__(accounts, posts)
+        self.last_timeline = None
+
+    def fetch_timeline(self, x_user_id: str) -> AsyncIterator[SourcePost]:
+        self.calls.append(("fetch", x_user_id))
+        self.last_timeline = CloseTrackingTimeline(self.posts.get(x_user_id, []))
+        return self.last_timeline
+
+
 class FakeDownloader:
     def __init__(self, should_fail: bool = False):
         self.should_fail = should_fail
@@ -124,6 +153,24 @@ def test_incremental_sync_stops_after_configured_consecutive_known_posts(tmp_pat
     result = asyncio.run(service.sync_account("1"))
 
     assert (result.posts_seen, result.posts_new) == (5, 2)
+
+
+def test_incremental_limit_closes_timeline_before_sync_returns(tmp_path) -> None:
+    account = SourceAccount("1", "first", "First")
+    source = CloseTrackingSource({"first": account}, {"1": [
+        _post("2", datetime(2026, 8, 2, tzinfo=UTC)),
+        _post("1", datetime(2026, 8, 1, tzinfo=UTC)),
+    ]})
+    service = _service(tmp_path, source, initial_post_limit=-1,
+                       incremental_known_post_limit=1)
+
+    async def run_syncs() -> None:
+        await service.sync_account("1")
+        result = await service.sync_account("1")
+        assert result.posts_seen == 1
+        assert source.last_timeline.close_called is True
+
+    asyncio.run(run_syncs())
 
 
 def test_new_media_is_downloaded_and_completed_media_is_not_downloaded_again(tmp_path) -> None:

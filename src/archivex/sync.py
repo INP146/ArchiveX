@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import asyncio
 from collections.abc import Callable, Iterable
+from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -73,44 +74,45 @@ class ArchiveSyncService:
             if self.media_enabled and self.media_downloader is not None:
                 await self._retry_failed_media(x_user_id)
             media_new += await self._backfill_media()
-            async for post in self.source.fetch_timeline(x_user_id):
-                if is_initial_sync and 0 <= self.initial_post_limit <= posts_seen:
-                    break
-                if post.x_user_id != x_user_id:
-                    raise ValueError(
-                        f"source returned X user {post.x_user_id} while synchronizing {x_user_id}"
+            async with aclosing(self.source.fetch_timeline(x_user_id)) as timeline:
+                async for post in timeline:
+                    if is_initial_sync and 0 <= self.initial_post_limit <= posts_seen:
+                        break
+                    if post.x_user_id != x_user_id:
+                        raise ValueError(
+                            f"source returned X user {post.x_user_id} while synchronizing {x_user_id}"
+                        )
+                    posts_seen += 1
+                    if not identity_observed:
+                        self.repository.observe_account_identity(
+                            x_user_id, post.username, _display_name(post.raw_payload)
+                        )
+                        identity_observed = True
+                    is_new = self.repository.upsert_post(
+                        PostInput(
+                            tweet_id=post.tweet_id,
+                            account_x_user_id=x_user_id,
+                            post_type=post.post_type,
+                            text=post.text,
+                            posted_at=post.posted_at,
+                            permalink=post.permalink,
+                            raw_payload=post.raw_payload,
+                        )
                     )
-                posts_seen += 1
-                if not identity_observed:
-                    self.repository.observe_account_identity(
-                        x_user_id, post.username, _display_name(post.raw_payload)
-                    )
-                    identity_observed = True
-                is_new = self.repository.upsert_post(
-                    PostInput(
-                        tweet_id=post.tweet_id,
-                        account_x_user_id=x_user_id,
-                        post_type=post.post_type,
-                        text=post.text,
-                        posted_at=post.posted_at,
-                        permalink=post.permalink,
-                        raw_payload=post.raw_payload,
-                    )
-                )
-                if is_new:
-                    posts_new += 1
-                    consecutive_known_posts = 0
-                elif not is_initial_sync:
-                    consecutive_known_posts += 1
-                media_new += self._persist_post_media(post.tweet_id, post.media)
-                if self.media_enabled and self.media_downloader is not None:
-                    await self._download_post_media(post.tweet_id)
-                if (
-                    not is_initial_sync
-                    and self.incremental_known_post_limit != -1
-                    and consecutive_known_posts >= self.incremental_known_post_limit
-                ):
-                    break
+                    if is_new:
+                        posts_new += 1
+                        consecutive_known_posts = 0
+                    elif not is_initial_sync:
+                        consecutive_known_posts += 1
+                    media_new += self._persist_post_media(post.tweet_id, post.media)
+                    if self.media_enabled and self.media_downloader is not None:
+                        await self._download_post_media(post.tweet_id)
+                    if (
+                        not is_initial_sync
+                        and self.incremental_known_post_limit != -1
+                        and consecutive_known_posts >= self.incremental_known_post_limit
+                    ):
+                        break
         except Exception as exc:
             message = str(exc) or exc.__class__.__name__
             self.repository.finish_sync_run(

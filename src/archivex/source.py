@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -49,7 +50,12 @@ class TwscrapePostSource:
 
     def __init__(self, session_path: Path) -> None:
         database_path = session_database_path(session_path)
-        self.api = API(str(database_path), raise_when_no_account=True)
+        self.api = API(
+            str(database_path),
+            raise_when_no_account=True,
+            wait_timeout=30,
+            wait_interval=1,
+        )
 
     async def resolve_account(self, username: str) -> SourceAccount | None:
         user = await self.api.user_by_login(username)
@@ -64,22 +70,24 @@ class TwscrapePostSource:
         )
 
     async def fetch_timeline(self, x_user_id: str) -> AsyncIterator[SourcePost]:
-        async for tweet in self.api.user_tweets_and_replies(int(x_user_id)):
-            # Conversation payloads can include another user's quoted/replied post.
-            if str(tweet.user.id) != x_user_id:
-                continue
-            raw_payload = tweet.dict()
-            yield SourcePost(
-                tweet_id=str(tweet.id),
-                x_user_id=str(tweet.user.id),
-                username=tweet.user.username,
-                post_type=_post_type(tweet),
-                text=tweet.rawContent,
-                posted_at=tweet.date,
-                permalink=tweet.url,
-                raw_payload=raw_payload,
-                media=media_from_payload(raw_payload),
-            )
+        timeline = self.api.user_tweets_and_replies(int(x_user_id))
+        async with aclosing(timeline):
+            async for tweet in timeline:
+                # Conversation payloads can include another user's quoted/replied post.
+                if str(tweet.user.id) != x_user_id:
+                    continue
+                raw_payload = tweet.dict()
+                yield SourcePost(
+                    tweet_id=str(tweet.id),
+                    x_user_id=str(tweet.user.id),
+                    username=tweet.user.username,
+                    post_type=_post_type(tweet),
+                    text=tweet.rawContent,
+                    posted_at=tweet.date,
+                    permalink=tweet.url,
+                    raw_payload=raw_payload,
+                    media=media_from_payload(raw_payload),
+                )
 
 
 def _post_type(tweet: Any) -> str:
