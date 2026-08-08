@@ -1,5 +1,8 @@
 from datetime import UTC, datetime
 from collections.abc import AsyncIterator
+import json
+import sqlite3
+import uuid
 
 from fastapi.testclient import TestClient
 
@@ -8,6 +11,7 @@ from archivex.main import create_app
 from archivex.session import SessionAccountSummary
 from archivex.source import SourceAccount, SourcePost
 from archivex.storage import ArchiveRepository, MediaInput, PostInput
+from archivex.task_dispatcher import TaskSubmission
 
 
 class FakeSource:
@@ -48,6 +52,20 @@ class FakeSessionAccountManager:
         return (await self.list_accounts())[0]
 
 
+class FakeTaskDispatcher:
+    def __init__(self):
+        self.calls = []
+        self.media_calls = []
+
+    async def enqueue_account_sync(self, x_user_id, trigger="manual"):
+        self.calls.append((x_user_id, trigger))
+        return TaskSubmission("task-123", "queued", False)
+
+    async def enqueue_media_download(self, media_id):
+        self.media_calls.append(media_id)
+        return TaskSubmission("media-task-123", "queued", False)
+
+
 def _settings(tmp_path) -> Settings:
     return Settings(
         _env_file=None,
@@ -58,6 +76,8 @@ def _settings(tmp_path) -> Settings:
         web_auth_display_name="Test Admin",
         web_auth_username="test_admin",
         web_auth_avatar_url="https://example.test/admin.jpg",
+        task_queue_enabled=False,
+        task_dashboard_db_path=tmp_path / "taskiq-dashboard.sqlite3",
     )
 
 
@@ -301,8 +321,9 @@ def test_account_management_resolves_once_and_then_uses_x_user_id(tmp_path) -> N
         assert paused.json()["status"] == "paused"
 
         synced = client.post(f"/api/accounts/{x_user_id}/sync", headers=headers)
-        assert synced.status_code == 200
-        assert synced.json()["status"] == "success"
+        assert synced.status_code == 202
+        assert synced.json()["state"] == "success"
+        assert synced.json()["task_id"] == f"inline:{x_user_id}"
         assert synced.json()["x_user_id"] == x_user_id
 
         history = client.get(
@@ -315,3 +336,174 @@ def test_account_management_resolves_once_and_then_uses_x_user_id(tmp_path) -> N
         ("fetch", x_user_id),
         ("fetch", x_user_id),
     ]
+
+
+def test_manual_sync_enqueues_without_waiting_for_the_source(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    source = FakeSource()
+    dispatcher = FakeTaskDispatcher()
+    with TestClient(create_app(
+        settings,
+        source,
+        FakeSessionAccountManager(),
+        dispatcher,
+    )) as client:
+        repository = ArchiveRepository(settings.archive_db_path, settings.archive_data_dir)
+        repository.upsert_account("42", "example")
+        response = client.post(
+            "/api/accounts/42/sync",
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "x_user_id": "42",
+        "task_id": "task-123",
+        "state": "queued",
+        "duplicate": False,
+    }
+    assert dispatcher.calls == [("42", "manual")]
+    assert source.calls == []
+
+
+def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    task_id = uuid.uuid4()
+    with sqlite3.connect(settings.task_dashboard_db_path) as connection:
+        connection.execute(
+            """CREATE TABLE tasks (
+                id CHAR(32) PRIMARY KEY, name TEXT NOT NULL, status INTEGER NOT NULL,
+                worker TEXT NOT NULL, args JSON NOT NULL, kwargs JSON NOT NULL,
+                labels JSON NOT NULL, result JSON, error TEXT, queued_at DATETIME,
+                started_at DATETIME, finished_at DATETIME
+            )"""
+        )
+        connection.execute(
+            """INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                task_id.hex,
+                "archivex.sync_account",
+                2,
+                "archivex:crawl",
+                json.dumps(["42", "manual"]),
+                "{}",
+                "{}",
+                None,
+                "network unavailable",
+                "2026-08-08 12:00:00",
+                "2026-08-08 12:00:01",
+                "2026-08-08 12:00:03",
+            ),
+        )
+
+    dispatcher = FakeTaskDispatcher()
+    with TestClient(create_app(
+        settings,
+        FakeSource(),
+        FakeSessionAccountManager(),
+        dispatcher,
+    )) as client:
+        repository = ArchiveRepository(settings.archive_db_path, settings.archive_data_dir)
+        repository.upsert_account("42", "example")
+        headers = {"Authorization": "Bearer test-token"}
+
+        tasks = client.get("/api/task-center/tasks?status=failure", headers=headers)
+        assert tasks.status_code == 200
+        assert tasks.json()["total"] == 1
+        assert tasks.json()["items"][0]["id"] == str(task_id)
+        assert tasks.json()["items"][0]["duration_ms"] == 2000
+
+        searched = client.get(f"/api/task-center/tasks?q={task_id}", headers=headers)
+        assert searched.status_code == 200
+        assert searched.json()["total"] == 1
+
+        detail = client.get(f"/api/task-center/tasks/{task_id}", headers=headers)
+        assert detail.status_code == 200
+        assert detail.json()["status"] == "failure"
+
+        rerun = client.post(
+            f"/api/task-center/tasks/{task_id}/rerun", headers=headers
+        )
+        assert rerun.status_code == 202
+        assert rerun.json()["task_id"] == "task-123"
+
+        schedules = client.get("/api/task-center/schedules", headers=headers)
+        assert schedules.status_code == 200
+        assert schedules.json()[0]["enabled_accounts"] == 1
+
+        run_schedule = client.post(
+            "/api/task-center/schedules/enabled-account-sync/run", headers=headers
+        )
+        assert run_schedule.status_code == 202
+        assert run_schedule.json() == {"queued": 1, "duplicates": 0}
+
+        repository.upsert_post(PostInput(
+            "100", "42", "original", "Post with media",
+            datetime(2026, 8, 8, tzinfo=UTC), "https://x.com/example/status/100", {},
+        ))
+        pending_media_id = repository.upsert_media(MediaInput(
+            "100", "image", "https://example.test/pending.jpg",
+        ))
+        completed_media_id = repository.upsert_media(MediaInput(
+            "100", "image", "https://example.test/completed.jpg",
+            download_status="completed",
+        ))
+        repository.upsert_account("85", "retrying")
+        with sqlite3.connect(settings.task_dashboard_db_path) as connection:
+            for name, args, task_status, labels, started_at in [
+                ("archivex.sync_account", ["42", "older"], 2, {}, "2026-08-08 11:00:00"),
+                ("archivex.sync_account", ["84", "older"], 2, {}, "2026-08-08 12:10:00"),
+                ("archivex.sync_account", ["84", "manual"], 1, {}, "2026-08-08 12:11:00"),
+                (
+                    "archivex.sync_account", ["85", "scheduled"], 2,
+                    {"max_retries": "5", "_retries": "2"}, "2026-08-08 12:12:00",
+                ),
+                ("archivex.download_media", [pending_media_id], 2, {}, "2026-08-08 13:00:00"),
+                ("archivex.download_media", [completed_media_id], 2, {}, "2026-08-08 13:01:00"),
+                ("archivex.schedule_enabled_accounts", [], 2, {}, "2026-08-08 13:02:00"),
+                ("archivex.unknown_task", ["target"], 2, {}, "2026-08-08 13:03:00"),
+            ]:
+                connection.execute(
+                    """INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        uuid.uuid4().hex, name, task_status, "archivex:crawl",
+                        json.dumps(args), "{}", json.dumps(labels), None,
+                        "failed" if task_status == 2 else None,
+                        started_at, started_at, started_at,
+                    ),
+                )
+
+        current_failures = client.get(
+            "/api/task-center/tasks?status=failure", headers=headers
+        )
+        assert current_failures.status_code == 200
+        assert current_failures.json()["total"] == 4
+        assert current_failures.json()["counts"]["failure"] == 4
+        assert sorted(task["name"] for task in current_failures.json()["items"]) == [
+            "archivex.download_media",
+            "archivex.schedule_enabled_accounts",
+            "archivex.sync_account",
+            "archivex.unknown_task",
+        ]
+
+        retry_failures = client.post(
+            "/api/task-center/failures/retry", headers=headers
+        )
+        assert retry_failures.status_code == 202
+        assert retry_failures.json() == {
+            "queued": 4,
+            "duplicates": 0,
+            "skipped_resolved": 2,
+            "automatic_retrying": 1,
+            "unsupported": 1,
+            "failed": 0,
+        }
+
+    assert dispatcher.calls == [
+        ("42", "rerun"),
+        ("42", "schedule_manual"),
+        ("42", "schedule_manual"),
+        ("85", "schedule_manual"),
+        ("42", "failure_retry"),
+    ]
+    assert dispatcher.media_calls == [pending_media_id]

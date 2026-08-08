@@ -15,6 +15,7 @@ import { LoginPage } from "../features/auth/login-page";
 import { DashboardPage } from "../features/dashboard/dashboard-page";
 import { SyncRunsPage } from "../features/sync-runs/sync-runs-page";
 import { SettingsPage } from "../features/settings/settings-page";
+import { TaskDetailsPage, TaskListPage, TaskSchedulesPage } from "../features/tasks/task-center-page";
 import { ArchiveSidebar } from "../components/archive-sidebar";
 import { getAccount, getAccounts } from "../lib/api/accounts";
 import { deleteSession, getSession } from "../lib/api/auth";
@@ -70,13 +71,34 @@ const settingsRoute = createRoute({
   component: SettingsPage
 });
 
+const tasksRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tasks",
+  component: TaskListPage
+});
+
+const taskDetailsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tasks/$taskId",
+  component: TaskDetailRouteComponent
+});
+
+const taskSchedulesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tasks/schedules",
+  component: TaskSchedulesPage
+});
+
 const routeTree = rootRoute.addChildren([
   dashboardRoute,
   loginRoute,
   accountsRoute,
   accountRoute,
   syncRunsRoute,
-  settingsRoute
+  settingsRoute,
+  tasksRoute,
+  taskDetailsRoute,
+  taskSchedulesRoute
 ]);
 
 export const router = createRouter({
@@ -88,6 +110,11 @@ declare module "@tanstack/react-router" {
   interface Register {
     router: typeof router;
   }
+}
+
+function TaskDetailRouteComponent() {
+  const { taskId } = taskDetailsRoute.useParams();
+  return <TaskDetailsPage taskId={taskId} />;
 }
 
 function AppShell() {
@@ -116,8 +143,10 @@ function AppShell() {
     return <Outlet />;
   }
 
+  const operationsView = pathname.startsWith("/tasks");
+
   return (
-    <div className="x-app-shell">
+    <div className={`x-app-shell ${operationsView ? "is-operations" : ""}`}>
       <ArchiveSidebar
         account={primaryAccount.data}
         viewer={session.data?.user}

@@ -21,6 +21,22 @@ class Settings(BaseSettings):
     archive_timezone: str = "Asia/Shanghai"
     archive_media_enabled: bool = True
     archive_media_max_bytes: int = Field(default=0, ge=0)
+    task_queue_enabled: bool = True
+    task_redis_url: str = "redis://127.0.0.1:6379/0"
+    task_crawl_queue_name: str = "archivex:crawl"
+    task_media_queue_name: str = "archivex:media"
+    task_worker_queue_name: str = "archivex:crawl"
+    task_result_ttl_seconds: int = Field(default=604800, ge=60)
+    task_retry_count: int = Field(default=5, ge=1)
+    task_retry_delay_seconds: int = Field(default=30, ge=1)
+    task_retry_max_delay_seconds: int = Field(default=900, ge=1)
+    task_sync_timeout_seconds: int = Field(default=1800, ge=60)
+    task_media_timeout_seconds: int = Field(default=300, ge=1)
+    task_dedupe_ttl_seconds: int = Field(default=3600, ge=60)
+    task_dashboard_enabled: bool = True
+    task_dashboard_path: str = "/ops/tasks"
+    task_dashboard_url: str = "http://127.0.0.1:8000/ops/tasks"
+    task_dashboard_db_path: Path = Path("/data/taskiq-dashboard.sqlite3")
     web_host: str = "0.0.0.0"
     web_port: int = Field(default=8000, ge=1, le=65535)
     web_auth_token: str = Field(min_length=1)
@@ -50,6 +66,14 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_optional_url(cls, value: str | None) -> str | None:
         return value or None
+
+    @field_validator("task_dashboard_path")
+    @classmethod
+    def normalize_dashboard_path(cls, value: str) -> str:
+        path = "/" + value.strip().strip("/")
+        if path == "/":
+            raise ValueError("must not be the root path")
+        return path
 
 
 @lru_cache

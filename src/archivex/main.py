@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-import logging
-import asyncio
 import hashlib
-from contextlib import asynccontextmanager
-from contextlib import suppress
+import logging
+import secrets
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
 from archivex.api import create_api_router, create_auth_router
 from archivex.config import Settings, get_settings
@@ -19,12 +21,19 @@ from archivex.source import PostSource, TwscrapePostSource
 from archivex.storage import initialize_storage
 from archivex.storage import ArchiveRepository
 from archivex.sync import ArchiveSyncService
+from archivex.task_center import TaskCenterRepository
+from archivex.task_dispatcher import (
+    InlineSyncTaskDispatcher,
+    SyncTaskDispatcher,
+    TaskiqSyncTaskDispatcher,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def create_app(settings: Settings | None = None, post_source: PostSource | None = None,
-               session_account_manager: SessionAccountManager | None = None) -> FastAPI:
+               session_account_manager: SessionAccountManager | None = None,
+               task_dispatcher: SyncTaskDispatcher | None = None) -> FastAPI:
     app_settings = settings or get_settings()
     repository = ArchiveRepository(app_settings.archive_db_path, app_settings.archive_data_dir)
     source = post_source or TwscrapePostSource(app_settings.twscrape_session_path)
@@ -37,10 +46,25 @@ def create_app(settings: Settings | None = None, post_source: PostSource | None 
         source,
         app_settings.archive_initial_post_limit,
         app_settings.archive_incremental_known_post_limit,
-        GalleryDlMediaDownloader(),
+        GalleryDlMediaDownloader(timeout_seconds=app_settings.task_media_timeout_seconds),
         app_settings.archive_media_enabled,
         app_settings.archive_media_max_bytes,
     )
+    dispatcher = task_dispatcher or (
+        TaskiqSyncTaskDispatcher()
+        if app_settings.task_queue_enabled
+        else InlineSyncTaskDispatcher(service)
+    )
+    task_center = TaskCenterRepository(
+        app_settings.task_dashboard_db_path,
+        app_settings.archive_sync_interval_seconds,
+        app_settings.task_crawl_queue_name,
+    )
+    task_dashboard = None
+    if app_settings.task_queue_enabled and app_settings.task_dashboard_enabled:
+        from archivex.task_dashboard import create_task_dashboard
+
+        task_dashboard = create_task_dashboard(app_settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -56,25 +80,34 @@ def create_app(settings: Settings | None = None, post_source: PostSource | None 
                 "Marked %d unfinished synchronization run(s) as interrupted",
                 interrupted_runs,
             )
-        stop_sync = asyncio.Event()
-        sync_task = asyncio.create_task(
-            _sync_loop(service, repository, app_settings.archive_sync_interval_seconds, stop_sync),
-            name="archive-sync-loop",
-        )
         logger.info(
-            "ArchiveX started with %d enabled accounts",
+            "ArchiveX started with %d enabled accounts; task queue %s",
             len(repository.list_enabled_account_ids()),
+            "enabled" if app_settings.task_queue_enabled else "disabled",
         )
-        try:
+        async with AsyncExitStack() as stack:
+            if task_dashboard is not None:
+                dashboard_app = task_dashboard.application
+                await stack.enter_async_context(
+                    dashboard_app.router.lifespan_context(dashboard_app)
+                )
+            elif app_settings.task_queue_enabled:
+                from archivex.tasks import broker
+
+                await broker.startup()
+                stack.push_async_callback(broker.shutdown)
             yield
-        finally:
-            stop_sync.set()
-            sync_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await sync_task
-            logger.info("ArchiveX stopped")
+        logger.info("ArchiveX stopped")
 
     app = FastAPI(title="ArchiveX", version="0.1.0", lifespan=lifespan)
+    if task_dashboard is not None:
+        from archivex.tasks import dashboard_api_token
+
+        app.add_middleware(
+            DashboardAccessMiddleware,
+            dashboard_path=app_settings.task_dashboard_path,
+            dashboard_api_token=dashboard_api_token(app_settings),
+        )
     app.add_middleware(
         SessionMiddleware,
         secret_key=app_settings.web_session_secret or _derived_session_secret(app_settings.web_auth_token),
@@ -90,8 +123,15 @@ def create_app(settings: Settings | None = None, post_source: PostSource | None 
         app_settings.web_auth_avatar_url,
     ))
     app.include_router(create_api_router(
-        repository, app_settings.web_auth_token, source, service, session_accounts
+        repository,
+        app_settings.web_auth_token,
+        source,
+        session_accounts,
+        dispatcher,
+        task_center,
     ))
+    if task_dashboard is not None:
+        app.mount(app_settings.task_dashboard_path, task_dashboard.application)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:
@@ -100,22 +140,24 @@ def create_app(settings: Settings | None = None, post_source: PostSource | None 
     return app
 
 
+class DashboardAccessMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, *, dashboard_path: str, dashboard_api_token: str) -> None:
+        super().__init__(app)
+        self.dashboard_path = dashboard_path.rstrip("/")
+        self.dashboard_api_token = dashboard_api_token
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if path != self.dashboard_path and not path.startswith(self.dashboard_path + "/"):
+            return await call_next(request)
+        dashboard_token = request.headers.get("access-token")
+        if dashboard_token and secrets.compare_digest(dashboard_token, self.dashboard_api_token):
+            return await call_next(request)
+        if request.method == "GET":
+            return RedirectResponse("/tasks", status_code=303)
+        return JSONResponse({"detail": "internal endpoint"}, status_code=401)
 def _derived_session_secret(auth_token: str) -> str:
     return hashlib.sha256(f"archivex-session:{auth_token}".encode()).hexdigest()
-
-
-async def _sync_loop(service: ArchiveSyncService, repository: ArchiveRepository,
-                     interval_seconds: int, stop: asyncio.Event) -> None:
-    while not stop.is_set():
-        results = await service.sync_accounts(repository.list_enabled_account_ids())
-        for result in results:
-            if result.status == "error":
-                # Source errors can contain request details, so keep logs account-scoped.
-                logger.error("Synchronization failed for @%s", result.username)
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=interval_seconds)
-        except TimeoutError:
-            pass
 
 
 def main() -> None:
@@ -127,5 +169,5 @@ def main() -> None:
         factory=True,
         host=settings.web_host,
         port=settings.web_port,
-        reload=True,
+        reload=False,
     )

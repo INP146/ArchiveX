@@ -10,6 +10,7 @@ import {
   FiLogOut,
   FiMoreHorizontal,
   FiSearch,
+  FiServer,
   FiSettings,
   FiUser,
   FiUsers
@@ -43,6 +44,7 @@ export function ArchiveSidebar({
           <Link to="/accounts" className={`x-sidebar-item ${pathname === "/accounts" ? "is-active" : ""}`}><FiUsers /><span>归档账号</span></Link>
           <a href={`${profilePath}#media`} className="x-sidebar-item"><FiImage /><span>媒体库</span></a>
           <Link to="/sync-runs" className={`x-sidebar-item ${pathname === "/sync-runs" ? "is-active" : ""}`}><FiActivity /><span>同步记录</span></Link>
+          <Link to="/tasks" className={`x-sidebar-item ${pathname.startsWith("/tasks") ? "is-active" : ""}`}><FiServer /><span>任务中心</span></Link>
           {account
             ? <a href={`/api/accounts/${account.x_user_id}`} target="_blank" rel="noreferrer" className="x-sidebar-item"><FiDatabase /><span>数据导出</span></a>
             : <span className="x-sidebar-item is-disabled"><FiDatabase /><span>数据导出</span></span>}

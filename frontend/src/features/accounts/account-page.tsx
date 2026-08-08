@@ -163,6 +163,15 @@ export function AccountPage() {
               {(sync.error ?? toggleArchive.error)?.message}
             </p>
           )}
+          {sync.data && (
+            <p className="x-profile-action-status">
+              {sync.data.duplicate ? "同步任务已在队列中" : "同步任务已加入队列"}
+              {" · "}
+              <Link to="/tasks/$taskId" params={{ taskId: sync.data.task_id }}>
+                查看任务
+              </Link>
+            </p>
+          )}
         </div>
       </section>
 

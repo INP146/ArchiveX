@@ -73,7 +73,7 @@ class ArchiveSyncService:
         try:
             if self.media_enabled and self.media_downloader is not None:
                 await self._retry_failed_media(x_user_id)
-            media_new += await self._backfill_media()
+            media_new += await self._backfill_media(x_user_id)
             async with aclosing(self.source.fetch_timeline(x_user_id)) as timeline:
                 async for post in timeline:
                     if is_initial_sync and 0 <= self.initial_post_limit <= posts_seen:
@@ -159,9 +159,9 @@ class ArchiveSyncService:
         for tweet_id in self.repository.failed_media_post_ids(account_x_user_id):
             await self._download_post_media(tweet_id)
 
-    async def _backfill_media(self) -> int:
+    async def _backfill_media(self, account_x_user_id: str) -> int:
         media_new = 0
-        for tweet_id, raw_payload in self.repository.unscanned_post_media():
+        for tweet_id, raw_payload in self.repository.unscanned_post_media(account_x_user_id):
             media_new += self._persist_post_media(tweet_id, media_from_payload(raw_payload))
             if self.media_enabled and self.media_downloader is not None:
                 await self._download_post_media(tweet_id)

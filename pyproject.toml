@@ -9,11 +9,14 @@ description = "Self-hosted X account archive"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "fastapi>=0.115,<1.0",
+  "fastapi>=0.134,<1.0",
   "gallery-dl>=1.28,<2.0",
   "itsdangerous>=2.2,<3.0",
   "jinja2>=3.1,<4.0",
   "pydantic-settings>=2.6,<3.0",
+  "taskiq>=0.12.4,<0.13",
+  "taskiq-dashboard>=0.4.4,<0.5",
+  "taskiq-redis>=1.2.3,<2.0",
   "twscrape>=0.19.2,<0.20",
   "uvicorn[standard]>=0.32,<1.0",
 ]

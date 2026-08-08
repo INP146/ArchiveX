@@ -1,26 +1,104 @@
+x-archivex-environment: &archivex-environment
+  TWSCRAPE_SESSION_PATH: /data/twscrape
+  ARCHIVE_DB_PATH: /data/archive.sqlite3
+  ARCHIVE_DATA_DIR: /data/archive
+  TASK_REDIS_URL: redis://redis:6379/0
+  TASK_DASHBOARD_URL: http://archivex:8000/ops/tasks
+  TASK_DASHBOARD_DB_PATH: /data/taskiq-dashboard.sqlite3
+
+x-archivex-service: &archivex-service
+  build: .
+  env_file:
+    - .env
+  volumes:
+    - ./data:/data
+  environment: *archivex-environment
+  restart: unless-stopped
+
 services:
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
   archivex:
+    <<: *archivex-service
     build: .
     ports:
-      - "8000:8000"
-    volumes:
-      - ./data:/data
+      - "${WEB_PORT:-8000}:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  worker-crawl:
+    <<: *archivex-service
+    command:
+      - taskiq
+      - worker
+      - archivex.tasks:broker
+      - --workers
+      - "1"
+      - --max-async-tasks
+      - "1"
+      - --max-prefetch
+      - "1"
+      - --shutdown-timeout
+      - "30"
     environment:
-      # Required: Authentication token for the web interface
-      WEB_AUTH_TOKEN: "change-me-in-production"
+      <<: *archivex-environment
+      TASK_REDIS_URL: redis://redis:6379/0
+      TASK_DASHBOARD_URL: http://archivex:8000/ops/tasks
+      TASK_WORKER_QUEUE_NAME: archivex:crawl
+    depends_on:
+      archivex:
+        condition: service_healthy
 
-      # Optional: Synchronization settings
-      # ARCHIVE_INITIAL_POST_LIMIT: 20
-      # ARCHIVE_INCREMENTAL_KNOWN_POST_LIMIT: 20
-      # ARCHIVE_SYNC_INTERVAL_SECONDS: 21600
-      # ARCHIVE_TIMEZONE: "Asia/Shanghai"
+  worker-media:
+    <<: *archivex-service
+    command:
+      - taskiq
+      - worker
+      - archivex.tasks:broker
+      - --workers
+      - "1"
+      - --max-async-tasks
+      - "4"
+      - --max-prefetch
+      - "4"
+      - --shutdown-timeout
+      - "30"
+    environment:
+      <<: *archivex-environment
+      TASK_REDIS_URL: redis://redis:6379/0
+      TASK_DASHBOARD_URL: http://archivex:8000/ops/tasks
+      TASK_WORKER_QUEUE_NAME: archivex:media
+    depends_on:
+      archivex:
+        condition: service_healthy
 
-      # Optional: Media download settings
-      # ARCHIVE_MEDIA_ENABLED: true
-      # ARCHIVE_MEDIA_MAX_BYTES: 0
+  scheduler:
+    <<: *archivex-service
+    command: ["taskiq", "scheduler", "archivex.tasks:scheduler"]
+    environment:
+      <<: *archivex-environment
+      TASK_REDIS_URL: redis://redis:6379/0
+      TASK_DASHBOARD_URL: http://archivex:8000/ops/tasks
+      TASK_WORKER_QUEUE_NAME: archivex:crawl
+    depends_on:
+      archivex:
+        condition: service_healthy
 
-      # Optional: Web service settings
-      # WEB_HOST: "0.0.0.0"
-      # WEB_PORT: 8000
-      # LOG_LEVEL: "INFO"
-    restart: unless-stopped
+volumes:
+  redis_data:

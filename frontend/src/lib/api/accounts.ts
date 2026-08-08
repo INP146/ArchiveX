@@ -78,7 +78,12 @@ export function setAccountEnabled(xUserId: string, archiveEnabled: boolean) {
 }
 
 export function syncAccount(xUserId: string) {
-  return apiFetch<{ status: string; error: string | null }>(`/api/accounts/${xUserId}/sync`, {
+  return apiFetch<{
+    x_user_id: string;
+    task_id: string;
+    state: string;
+    duplicate: boolean;
+  }>(`/api/accounts/${xUserId}/sync`, {
     method: "POST"
   });
 }

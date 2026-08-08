@@ -665,11 +665,16 @@ class ArchiveRepository:
             )
         return is_new
 
-    def unscanned_post_media(self) -> list[tuple[str, Mapping[str, Any]]]:
+    def unscanned_post_media(
+        self, account_x_user_id: str | None = None
+    ) -> list[tuple[str, Mapping[str, Any]]]:
         with _connect(self.database_path) as connection:
-            rows = connection.execute(
-                "SELECT tweet_id, raw_json_path FROM posts WHERE media_scanned_at IS NULL"
-            ).fetchall()
+            query = "SELECT tweet_id, raw_json_path FROM posts WHERE media_scanned_at IS NULL"
+            parameters: tuple[str, ...] = ()
+            if account_x_user_id is not None:
+                query += " AND account_x_user_id = ?"
+                parameters = (account_x_user_id,)
+            rows = connection.execute(query, parameters).fetchall()
         posts = []
         for row in rows:
             try:
@@ -727,6 +732,27 @@ class ArchiveRepository:
                 (tweet_id,),
             ).fetchall()
         return [MediaRecord(**dict(row)) for row in rows]
+
+    def get_media_record(self, media_id: str) -> MediaRecord | None:
+        with _connect(self.database_path) as connection:
+            row = connection.execute(
+                """SELECT id, tweet_id, source_url, download_status
+                FROM media WHERE id = ?""",
+                (media_id,),
+            ).fetchone()
+        return MediaRecord(**dict(row)) if row else None
+
+    def media_ids_to_download(self, account_x_user_id: str) -> list[str]:
+        with _connect(self.database_path) as connection:
+            rows = connection.execute(
+                """SELECT media.id FROM media
+                JOIN posts ON posts.tweet_id = media.tweet_id
+                WHERE posts.account_x_user_id = ?
+                    AND media.download_status IN ('pending', 'failed')
+                ORDER BY media.created_at, media.id""",
+                (account_x_user_id,),
+            ).fetchall()
+        return [str(row["id"]) for row in rows]
 
     def failed_media_post_ids(self, account_x_user_id: str) -> list[str]:
         with _connect(self.database_path) as connection:

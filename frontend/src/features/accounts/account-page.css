@@ -73,6 +73,9 @@
 .x-username-history { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 13px; color: var(--x-muted); font-size: 13px; }
 .x-username-history span:not(:first-child) { color: #8b98a5; }
 .x-profile-action-error { margin: 12px 0 0; color: #f4212e; font-size: 14px; }
+.x-profile-action-status { margin: 12px 0 0; color: var(--x-muted); font-size: 14px; }
+.x-profile-action-status a { color: var(--x-accent); text-decoration: none; }
+.x-profile-action-status a:hover { text-decoration: underline; }
 .is-spinning { animation: x-spin .8s linear infinite; }
 
 @keyframes x-spin { to { transform: rotate(360deg); } }

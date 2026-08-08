@@ -5,14 +5,26 @@ foundation provides configuration validation, persistent local storage setup,
 a health endpoint, post synchronization, and local media downloads. It uses
 `twscrape` to discover posts and `gallery-dl` to download accessible media.
 
-## Run with Docker
+## Local development
 
 ```sh
 cp .env.example .env
-docker compose up --build
+.venv/bin/archivex
+.venv/bin/taskiq worker archivex.tasks:broker --workers 1 --max-async-tasks 1 --max-prefetch 1
+TASK_WORKER_QUEUE_NAME=archivex:media .venv/bin/taskiq worker archivex.tasks:broker --workers 1 --max-async-tasks 4 --max-prefetch 4
+.venv/bin/taskiq scheduler archivex.tasks:scheduler
 ```
 
-Open `http://localhost:8000/health`.
+Run each command in a separate terminal and use a host Redis instance configured
+by `TASK_REDIS_URL` (the default is `redis://127.0.0.1:6379/0`). Only one
+scheduler process may run. Open `http://localhost:<WEB_PORT>/health` after the
+processes start.
+
+## Optional Compose deployment
+
+```sh
+docker compose up --build
+```
 
 The `./data` directory is mounted at `/data` in the container and holds the
 SQLite database, archive files, and future twscrape session data. Keep this
@@ -24,10 +36,12 @@ All settings are documented in `.env.example`. `WEB_AUTH_TOKEN`,
 `ARCHIVE_DB_PATH`, and `ARCHIVE_DATA_DIR` are required. Archive targets are
 added in the Web UI and stored by stable X user ID.
 
-The application starts one sequential sync loop for accounts enabled in the
-database. It imports configured history on the first run and then checks for
-updates at `ARCHIVE_SYNC_INTERVAL_SECONDS`. New posts create media download records;
-failed media downloads are retried during later scans. Set
+The application uses Taskiq and Redis for durable background work. A single
+scheduler enqueues enabled accounts at `ARCHIVE_SYNC_INTERVAL_SECONDS`, the
+crawl worker archives posts, and separate media workers download attachments.
+Redis Stream acknowledgements recover tasks after a worker exits, duplicate
+account/media submissions are coalesced, and transient failures use delayed
+retries with jitter. Set
 `ARCHIVE_MEDIA_ENABLED=false` to archive post metadata without downloading
 files. `TWSCRAPE_SESSION_PATH` is either a
 twscrape account database file or a directory containing `accounts.db`. Its
@@ -61,9 +75,36 @@ proxy URL after it is saved.
 
 Account onboarding is a two-step operation. `POST /api/accounts/resolve` resolves
 a username or profile URL without persisting it. `POST /api/accounts` confirms
-the returned `x_user_id` and immediately starts its initial synchronization in
-the background. Account detail, pause/resume, manual sync, username history,
+the returned `x_user_id` and immediately queues its initial synchronization.
+`POST /api/accounts/{x_user_id}/sync` returns `202 Accepted` with a task ID;
+repeated requests for an account that is already queued or running return the
+existing task ID. Account detail, pause/resume, manual sync, username history,
 post ownership, and archive paths all use the string `x_user_id`.
+
+## Task queue and dashboard
+
+The optional Compose deployment contains five runtime services:
+
+```text
+redis
+archivex       FastAPI and the mounted task dashboard
+worker-crawl   one concurrent account synchronization
+worker-media   four concurrent media downloads
+scheduler      the single Taskiq scheduler
+```
+
+After signing in to ArchiveX, use **任务中心** in the Web sidebar or open
+`http://localhost:5173/tasks`. The integrated page shows queued, running,
+completed, failed, and abandoned tasks, execution details, rerun actions, and
+configured schedules. `/ops/tasks` is reserved for internal Taskiq event
+reporting and redirects browser traffic back to the integrated page.
+
+Queue settings are documented in `.env.example`. Important operational limits
+include `TASK_SYNC_TIMEOUT_SECONDS`, `TASK_MEDIA_TIMEOUT_SECONDS`, retry count
+and delay settings, and `TASK_DEDUPE_TTL_SECONDS`. Redis is kept internal to the
+Compose network and persists its append-only log in the `redis_data` volume.
+
+The API no longer starts an in-process periodic synchronization loop.
 
 ## Web frontend
 

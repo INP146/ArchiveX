@@ -13,7 +13,8 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       proxy: {
         "/api": apiTarget,
-        "/health": apiTarget
+        "/health": apiTarget,
+        "/ops/tasks": apiTarget
       }
     }
   };

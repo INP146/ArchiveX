@@ -32,6 +32,10 @@
 .x-profile-column::-webkit-scrollbar {
   display: none;
 }
+
+.x-app-shell.is-operations { grid-template-columns: 275px 900px; }
+.x-app-shell.is-operations .x-app-content { width: 900px; }
+.x-app-shell.is-operations .x-empty-rail-right { display: none; }
 .x-left-rail {
   display: flex;
   justify-content: flex-end;
@@ -172,15 +176,19 @@
   .x-sidebar-account-menu { right: auto; bottom: 62px; left: 58px; }
   .x-sidebar-account { display: flex; width: 52px; justify-content: center; padding: 6px; }
   .x-sidebar-account-copy, .x-sidebar-account-more { display: none; }
+  .x-app-shell.is-operations { grid-template-columns: 88px minmax(0, 900px); }
+  .x-app-shell.is-operations .x-app-content { width: min(900px, calc(100vw - 88px)); }
 }
 
 @media (max-width: 999px) {
   .x-app-shell { grid-template-columns: 88px 600px; }
   .x-empty-rail-right { display: none; }
+  .x-app-shell.is-operations { grid-template-columns: 88px minmax(0, 1fr); }
 }
 
 @media (max-width: 700px) {
   .x-app-shell { display: block; }
   .x-left-rail, .x-empty-rail { display: none; }
   .x-app-content { width: 100%; }
+  .x-app-shell.is-operations .x-app-content { width: 100%; }
 }

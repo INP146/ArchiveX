@@ -12,6 +12,7 @@ def test_health_initializes_persistent_storage(tmp_path) -> None:
         archive_data_dir=tmp_path / "archive",
         twscrape_session_path=tmp_path / "sessions",
         web_auth_token="test-token",
+        task_queue_enabled=False,
     )
 
     with TestClient(create_app(settings)) as client:
@@ -31,6 +32,7 @@ def test_startup_closes_sync_runs_left_running_by_previous_process(tmp_path) -> 
         archive_data_dir=tmp_path / "archive",
         twscrape_session_path=tmp_path / "sessions",
         web_auth_token="test-token",
+        task_queue_enabled=False,
     )
     initialize_storage(
         settings.archive_db_path, settings.archive_data_dir, settings.twscrape_session_path
