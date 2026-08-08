@@ -31,6 +31,7 @@ export function AccountPage() {
   const [activeTab, setActiveTab] = useState<AccountTimelineTab>(() => (
     window.location.hash === "#media" ? "media" : "posts"
   ));
+  const [failedBannerUrl, setFailedBannerUrl] = useState<string | null>(null);
   useEffect(() => {
     const syncTabFromHash = () => setActiveTab(
       window.location.hash === "#media" ? "media" : "posts"
@@ -68,6 +69,7 @@ export function AccountPage() {
   const profile = account.data;
   const username = profile.current_username;
   const displayName = profile.display_name ?? username ?? profile.x_user_id;
+  const bannerUrl = profile.profile_banner_url;
   const previousUsernames = history.data?.filter((item) => item.observed_to !== null) ?? [];
   return (
     <div className="x-profile-column">
@@ -83,7 +85,9 @@ export function AccountPage() {
 
       <section className="x-profile-hero">
         <div className="x-banner">
-          {profile.profile_banner_url && <img src={profile.profile_banner_url} alt="" />}
+          {bannerUrl && failedBannerUrl !== bannerUrl && (
+            <img src={bannerUrl} alt="" onError={() => setFailedBannerUrl(bannerUrl)} />
+          )}
         </div>
         <div className="x-profile-details">
           <div className="x-avatar-row">

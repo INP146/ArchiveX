@@ -825,8 +825,13 @@ class ArchiveRepository:
         if isinstance(profile_image_url, str):
             profile_image_url = profile_image_url.replace("_normal.", "_400x400.")
         banner_url = user.get("profileBannerUrl")
-        if isinstance(banner_url, str) and not banner_url.rstrip("/").endswith("1500x500"):
-            banner_url = f"{banner_url.rstrip('/')}/1500x500"
+        if isinstance(banner_url, str):
+            banner_url = banner_url.strip().rstrip("/")
+            banner_url = (
+                banner_url if banner_url.endswith("1500x500")
+                else f"{banner_url}/1500x500" if banner_url
+                else None
+            )
         return {
             "description": user.get("rawDescription") or user.get("description") or None,
             "location": user.get("location") or None,
