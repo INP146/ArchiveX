@@ -26,18 +26,18 @@ import {
 import "../accounts/account-page.css";
 
 export function PostTimeline({
-  accountId,
+  xUserId,
   tab,
   emptyMessage = "这个分类下还没有归档内容。"
 }: {
-  accountId?: string;
+  xUserId?: string;
   tab: AccountTimelineTab;
   emptyMessage?: string;
 }) {
   const timelineEndRef = useRef<HTMLDivElement>(null);
   const posts = useInfiniteQuery({
-    queryKey: ["posts", accountId ?? "all", tab],
-    queryFn: ({ pageParam }) => getTimelinePosts(tab, pageParam, accountId),
+    queryKey: ["posts", xUserId ?? "all", tab],
+    queryFn: ({ pageParam }) => getTimelinePosts(tab, pageParam, xUserId),
     initialPageParam: 0,
     getNextPageParam: (lastPage, pages) => lastPage.length === POSTS_PAGE_SIZE
       ? pages.reduce((total, page) => total + page.length, 0)
@@ -99,8 +99,9 @@ function TimelineError({ error }: { error: Error }) {
 }
 
 function PostItem({ post }: { post: ArchivedPost }) {
-  const authorName = post.author_display_name ?? post.author_username ?? post.username;
-  const authorUsername = post.author_username ?? post.username;
+  const authorName = post.author_display_name ?? post.author_username ?? post.username
+    ?? post.account_x_user_id;
+  const authorUsername = post.author_username ?? post.username ?? post.account_x_user_id;
   const avatarUrl = post.author_profile_image_url;
   const translationLanguage = post.language && !isChineseLanguage(post.language)
     ? formatLanguage(post.language)

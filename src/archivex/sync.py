@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class AccountSyncResult:
+    x_user_id: str
     username: str
     status: str
     posts_seen: int = 0
@@ -39,45 +40,56 @@ class ArchiveSyncService:
         self.media_enabled = media_enabled
         self.media_max_bytes = media_max_bytes
         self.now = now or (lambda: datetime.now(UTC))
+        self._account_locks: dict[tuple[int, str], asyncio.Lock] = {}
 
-    async def sync_accounts(self, usernames: Iterable[str]) -> list[AccountSyncResult]:
+    async def sync_accounts(self, x_user_ids: Iterable[str]) -> list[AccountSyncResult]:
         results: list[AccountSyncResult] = []
-        for username in usernames:
-            results.append(await self.sync_account(username))
+        for x_user_id in x_user_ids:
+            results.append(await self.sync_account(x_user_id))
         return results
 
-    async def sync_account(self, username: str) -> AccountSyncResult:
-        try:
-            source_account = await self.source.resolve_account(username)
-        except Exception as exc:
-            message = str(exc) or exc.__class__.__name__
-            logger.exception("Account resolution failed for @%s", username)
-            return AccountSyncResult(username=username, status="error", error=message)
-        if source_account is None:
-            return AccountSyncResult(username=username, status="error", error="account not found")
+    async def sync_account(self, x_user_id: str) -> AccountSyncResult:
+        loop_key = (id(asyncio.get_running_loop()), x_user_id)
+        lock = self._account_locks.setdefault(loop_key, asyncio.Lock())
+        async with lock:
+            return await self._sync_account(x_user_id)
 
-        account = self.repository.upsert_account(
-            source_account.x_user_id, source_account.username, source_account.display_name
-        )
-        run_id = self.repository.start_sync_run(account.id)
+    async def _sync_account(self, x_user_id: str) -> AccountSyncResult:
+        account = self.repository.get_account(x_user_id)
+        if account is None:
+            return AccountSyncResult(
+                x_user_id=x_user_id, username=x_user_id, status="error", error="account not found"
+            )
+
+        username = account.current_username or x_user_id
+        run_id = self.repository.start_sync_run(x_user_id)
         posts_seen = 0
         posts_new = 0
         media_new = 0
         is_initial_sync = account.last_sync_at is None
         consecutive_known_posts = 0
+        identity_observed = False
         try:
             if self.media_enabled and self.media_downloader is not None:
-                await self._retry_failed_media(account.id)
+                await self._retry_failed_media(x_user_id)
             media_new += await self._backfill_media()
-            async for post in self.source.fetch_timeline(account.x_user_id):
+            async for post in self.source.fetch_timeline(x_user_id):
                 if is_initial_sync and 0 <= self.initial_post_limit <= posts_seen:
                     break
+                if post.x_user_id != x_user_id:
+                    raise ValueError(
+                        f"source returned X user {post.x_user_id} while synchronizing {x_user_id}"
+                    )
                 posts_seen += 1
+                if not identity_observed:
+                    self.repository.observe_account_identity(
+                        x_user_id, post.username, _display_name(post.raw_payload)
+                    )
+                    identity_observed = True
                 is_new = self.repository.upsert_post(
                     PostInput(
                         tweet_id=post.tweet_id,
-                        account_id=account.id,
-                        username=post.username,
+                        account_x_user_id=x_user_id,
                         post_type=post.post_type,
                         text=post.text,
                         posted_at=post.posted_at,
@@ -105,17 +117,21 @@ class ArchiveSyncService:
                 run_id, posts_seen=posts_seen, posts_new=posts_new, media_new=media_new,
                 status="error", error=message
             )
-            self.repository.mark_account_sync_error(account.id, message)
-            logger.exception("Synchronization failed for @%s", username)
-            return AccountSyncResult(username=username, status="error", posts_seen=posts_seen,
-                                     posts_new=posts_new, error=message)
+            self.repository.mark_account_sync_error(x_user_id, message)
+            logger.exception("Synchronization failed for X user %s", x_user_id)
+            return AccountSyncResult(x_user_id=x_user_id, username=username, status="error",
+                                     posts_seen=posts_seen, posts_new=posts_new, error=message)
 
         completed_at = self.now()
         self.repository.finish_sync_run(
             run_id, posts_seen=posts_seen, posts_new=posts_new, media_new=media_new, status="success"
         )
-        self.repository.mark_account_sync_success(account.id, completed_at)
-        return AccountSyncResult(username=source_account.username, status="success",
+        self.repository.mark_account_sync_success(x_user_id, completed_at)
+        current = self.repository.get_account(x_user_id)
+        return AccountSyncResult(x_user_id=x_user_id,
+                                 username=(current.current_username
+                                           if current and current.current_username else username),
+                                 status="success",
                                  posts_seen=posts_seen, posts_new=posts_new, media_new=media_new)
 
     async def _download_post_media(self, tweet_id: str) -> None:
@@ -131,8 +147,8 @@ class ArchiveSyncService:
                 self.repository.fail_media(media.id, message)
                 logger.warning("Media download failed for archived post %s", tweet_id)
 
-    async def _retry_failed_media(self, account_id: int) -> None:
-        for tweet_id in self.repository.failed_media_post_ids(account_id):
+    async def _retry_failed_media(self, account_x_user_id: str) -> None:
+        for tweet_id in self.repository.failed_media_post_ids(account_x_user_id):
             await self._download_post_media(tweet_id)
 
     async def _backfill_media(self) -> int:
@@ -152,3 +168,13 @@ class ArchiveSyncService:
         )
         self.repository.mark_post_media_scanned(tweet_id)
         return media_new
+
+
+def _display_name(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    user = payload.get("user")
+    if not isinstance(user, dict):
+        return None
+    value = user.get("displayname") or user.get("displayName")
+    return value if isinstance(value, str) and value else None

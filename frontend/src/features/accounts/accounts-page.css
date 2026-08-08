@@ -18,6 +18,12 @@
   backdrop-filter: blur(12px);
 }
 
+.x-accounts-header > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
 .x-accounts-header h1 {
   margin: 0;
   font-size: 20px;
@@ -30,6 +36,62 @@
   font-size: 13px;
   line-height: 16px;
 }
+
+.x-account-add {
+  padding: 14px 16px 16px;
+  border-bottom: 1px solid var(--x-border);
+  background: #080808;
+}
+
+.x-account-lookup {
+  display: grid;
+  height: 44px;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 12px;
+  border: 1px solid #536471;
+  border-radius: 6px;
+  background: #000;
+  color: var(--x-muted);
+}
+
+.x-account-lookup:focus-within { border-color: var(--x-accent); }
+.x-account-lookup svg { width: 18px; height: 18px; }
+.x-account-lookup input { min-width: 0; color: var(--x-text); outline: 0; font-size: 15px; }
+.x-account-lookup input::placeholder { color: var(--x-muted); }
+
+.x-account-lookup button,
+.x-resolved-account > button {
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 13px;
+  border-radius: 999px;
+  background: #eff3f4;
+  color: #0f1419;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.x-account-lookup button:disabled,
+.x-resolved-account > button:disabled { opacity: .55; }
+
+.x-resolved-account {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--x-border);
+}
+
+.x-resolved-account > button svg { width: 17px; height: 17px; }
+.x-account-id { color: #8b98a5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.x-account-inline-error { margin: 10px 2px 0; color: #f4212e; font-size: 14px; line-height: 19px; }
 
 .x-account-row {
   display: grid;
@@ -140,4 +202,7 @@
   }
   .x-account-list-avatar { width: 44px; height: 44px; }
   .x-account-list-action { width: 64px; }
+  .x-account-add { padding-right: 12px; padding-left: 12px; }
+  .x-resolved-account { grid-template-columns: 44px minmax(0, 1fr); }
+  .x-resolved-account > button { grid-column: 2; width: fit-content; }
 }

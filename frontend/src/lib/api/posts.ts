@@ -11,8 +11,8 @@ export interface PostMedia {
 
 export interface ArchivedPost {
   tweet_id: string;
-  account_id: number;
-  username: string;
+  account_x_user_id: string;
+  username: string | null;
   post_type: "original" | "reply" | "repost" | "quote" | string;
   text: string;
   posted_at: string;
@@ -41,12 +41,12 @@ export type AccountTimelineTab = "posts" | "replies" | "media";
 
 export const POSTS_PAGE_SIZE = 50;
 
-export function getTimelinePosts(tab: AccountTimelineTab, offset: number, accountId?: string) {
+export function getTimelinePosts(tab: AccountTimelineTab, offset: number, xUserId?: string) {
   const query = new URLSearchParams({
     limit: String(POSTS_PAGE_SIZE),
     offset: String(offset)
   });
-  if (accountId !== undefined) query.set("account_id", accountId);
+  if (xUserId !== undefined) query.set("account_x_user_id", xUserId);
   if (tab === "posts") query.set("exclude_post_type", "reply");
   if (tab === "replies") query.set("post_type", "reply");
   if (tab === "media") query.set("has_media", "true");

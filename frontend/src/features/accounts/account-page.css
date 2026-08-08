@@ -55,15 +55,25 @@
 .x-avatar-large { width: 142px; height: 142px; margin-top: -72px; border: 4px solid #000; font-size: 48px; }
 .x-profile-actions { display: flex; align-items: center; gap: 8px; padding-top: 12px; }
 .x-outline-button { border: 1px solid #536471; }
-.x-archive-status { display: inline-flex; align-items: center; justify-content: center; height: 36px; padding: 0 14px; border: 1px solid #536471; border-radius: 999px; background: transparent; color: #eff3f4; font-size: 14px; font-weight: 700; text-align: center; }
+.x-profile-actions button:disabled { opacity: .55; }
+.x-archive-toggle { display: inline-flex; height: 36px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border: 1px solid #536471; border-radius: 999px; background: transparent; color: #eff3f4; font-size: 14px; font-weight: 700; text-align: center; }
+.x-archive-toggle:hover { background: rgba(239, 243, 244, .1); }
+.x-archive-toggle svg { width: 16px; height: 16px; }
 .x-identity h1 { margin: 0; font-size: 22px; font-weight: 800; line-height: 26px; }
 .x-identity p { margin: 0; color: var(--x-muted); font-size: 15px; }
 .x-bio { margin: 15px 0 0; font-size: 15px; line-height: 20px; white-space: pre-wrap; }
 .x-profile-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 14px; color: var(--x-muted); font-size: 15px; }
 .x-profile-meta span { display: flex; align-items: center; gap: 5px; }
 .x-profile-meta svg { font-size: 18px; }
+.x-profile-meta .x-stable-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .x-follow-counts { display: flex; gap: 20px; margin-top: 13px; color: var(--x-muted); font-size: 14px; }
 .x-follow-counts strong { color: var(--x-text); }
+.x-username-history { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 13px; color: var(--x-muted); font-size: 13px; }
+.x-username-history span:not(:first-child) { color: #8b98a5; }
+.x-profile-action-error { margin: 12px 0 0; color: #f4212e; font-size: 14px; }
+.is-spinning { animation: x-spin .8s linear infinite; }
+
+@keyframes x-spin { to { transform: rotate(360deg); } }
 
 .x-tabs { display: grid; height: 53px; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--x-border); }
 .x-tabs button { position: relative; color: var(--x-muted); font-size: 15px; font-weight: 500; transition: background .15s ease; }
@@ -125,7 +135,8 @@
   .x-banner { height: min(33.33vw, 200px); }
   .x-avatar-large { width: 24vw; height: 24vw; max-width: 142px; max-height: 142px; margin-top: max(-12vw, -72px); }
   .x-header-copy { margin-left: 20px; }
-  .x-archive-status { height: 34px; padding: 0 12px; }
+  .x-archive-toggle { width: 36px; height: 36px; padding: 0; border-radius: 50%; }
+  .x-archive-toggle span { position: absolute; overflow: hidden; width: 1px; height: 1px; clip: rect(0 0 0 0); }
   .x-profile-actions { gap: 6px; }
   .x-profile-details { padding-right: 14px; padding-left: 14px; }
   .x-post { padding-right: 12px; padding-left: 12px; }

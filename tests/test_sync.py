@@ -53,9 +53,11 @@ def _service(tmp_path, source, initial_post_limit=1, incremental_known_post_limi
     database_path = tmp_path / "archive.sqlite3"
     archive_path = tmp_path / "archive"
     initialize_storage(database_path, archive_path, tmp_path / "sessions")
-    return ArchiveSyncService(ArchiveRepository(database_path, archive_path), source,
-                              initial_post_limit, incremental_known_post_limit,
-                              media_downloader=downloader,
+    repository = ArchiveRepository(database_path, archive_path)
+    for account in {item.x_user_id: item for item in source.accounts.values()}.values():
+        repository.upsert_account(account.x_user_id, account.username, account.display_name)
+    return ArchiveSyncService(repository, source, initial_post_limit,
+                              incremental_known_post_limit, media_downloader=downloader,
                               now=lambda: datetime(2026, 8, 5, tzinfo=UTC))
 
 
@@ -65,8 +67,8 @@ def test_initial_and_incremental_sync_are_idempotent(tmp_path) -> None:
                                                        _post("1", datetime(2026, 6, 1, tzinfo=UTC))]})
     service = _service(tmp_path, source)
 
-    first = asyncio.run(service.sync_account("first"))
-    second = asyncio.run(service.sync_account("first"))
+    first = asyncio.run(service.sync_account("1"))
+    second = asyncio.run(service.sync_account("1"))
 
     assert (first.status, first.posts_seen, first.posts_new) == ("success", 1, 1)
     assert (second.status, second.posts_seen, second.posts_new) == ("success", 1, 0)
@@ -81,7 +83,7 @@ def test_account_failures_do_not_stop_later_accounts(tmp_path) -> None:
     ]}, failures={"1"})
     service = _service(tmp_path, source)
 
-    results = asyncio.run(service.sync_accounts(["first", "second"]))
+    results = asyncio.run(service.sync_accounts(["1", "2"]))
 
     assert [result.status for result in results] == ["error", "success"]
     assert results[1].posts_new == 1
@@ -95,7 +97,7 @@ def test_unlimited_initial_sync_imports_all_posts(tmp_path) -> None:
     ]})
     service = _service(tmp_path, source, initial_post_limit=-1)
 
-    result = asyncio.run(service.sync_account("first"))
+    result = asyncio.run(service.sync_account("1"))
 
     assert (result.status, result.posts_seen, result.posts_new) == ("success", 2, 2)
 
@@ -109,7 +111,7 @@ def test_incremental_sync_stops_after_configured_consecutive_known_posts(tmp_pat
     ]})
     service = _service(tmp_path, source, initial_post_limit=-1,
                        incremental_known_post_limit=2)
-    asyncio.run(service.sync_account("first"))
+    asyncio.run(service.sync_account("1"))
     source.posts["1"] = [
         _post("4", datetime(2026, 8, 4, tzinfo=UTC)),
         _post("3", datetime(2026, 8, 3, tzinfo=UTC)),
@@ -119,7 +121,7 @@ def test_incremental_sync_stops_after_configured_consecutive_known_posts(tmp_pat
         _post("0", datetime(2026, 7, 31, tzinfo=UTC)),
     ]
 
-    result = asyncio.run(service.sync_account("first"))
+    result = asyncio.run(service.sync_account("1"))
 
     assert (result.posts_seen, result.posts_new) == (5, 2)
 
@@ -133,8 +135,8 @@ def test_new_media_is_downloaded_and_completed_media_is_not_downloaded_again(tmp
     downloader = FakeDownloader()
     service = _service(tmp_path, source, downloader=downloader)
 
-    first = asyncio.run(service.sync_account("first"))
-    second = asyncio.run(service.sync_account("first"))
+    first = asyncio.run(service.sync_account("1"))
+    second = asyncio.run(service.sync_account("1"))
 
     assert first.media_new == 1
     assert second.media_new == 0
@@ -156,7 +158,7 @@ def test_failed_media_download_is_recorded_without_failing_post_sync(tmp_path) -
     service = _service(tmp_path, FakeSource({"first": account}, {"1": [post]}),
                        downloader=FakeDownloader(should_fail=True))
 
-    result = asyncio.run(service.sync_account("first"))
+    result = asyncio.run(service.sync_account("1"))
 
     assert result.status == "success"
     with sqlite3.connect(tmp_path / "archive.sqlite3") as connection:
@@ -173,11 +175,11 @@ def test_failed_media_is_retried_when_post_is_absent_from_later_timeline(tmp_pat
     source = FakeSource({"first": account}, {"1": [post]})
     downloader = FakeDownloader(should_fail=True)
     service = _service(tmp_path, source, downloader=downloader)
-    asyncio.run(service.sync_account("first"))
+    asyncio.run(service.sync_account("1"))
 
     source.posts["1"] = []
     downloader.should_fail = False
-    result = asyncio.run(service.sync_account("first"))
+    result = asyncio.run(service.sync_account("1"))
 
     assert result.status == "success"
     assert len(downloader.calls) == 2
@@ -196,14 +198,53 @@ def test_existing_posts_are_backfilled_from_their_raw_payload(tmp_path) -> None:
     service = _service(tmp_path, source, downloader=downloader)
     archived_account = service.repository.upsert_account("1", "first", "First")
     service.repository.upsert_post(PostInput(
-        "2", archived_account.id, "first", "original", "post", datetime(2026, 8, 5, tzinfo=UTC),
+        "2", archived_account.x_user_id, "original", "post", datetime(2026, 8, 5, tzinfo=UTC),
         "https://x.com/first/status/2", {
             "media": {"photos": [{"url": "https://pbs.twimg.com/media/example.jpg"}],
                       "videos": [], "animated": []}
         },
     ))
 
-    result = asyncio.run(service.sync_account("first"))
+    result = asyncio.run(service.sync_account("1"))
 
     assert result.media_new == 1
     assert downloader.calls == [("https://pbs.twimg.com/media/example.jpg", 0)]
+
+
+def test_sync_uses_stable_x_user_id_after_username_changes_owner(tmp_path) -> None:
+    original = SourceAccount("1", "alice", "Original")
+    replacement = SourceAccount("2", "alice", "Replacement")
+    renamed_post = SourcePost(
+        "10", "1", "alice_new", "original", "renamed", datetime(2026, 8, 5, tzinfo=UTC),
+        "https://x.com/alice_new/status/10",
+        {"id": "10", "user": {"username": "alice_new", "displayname": "Original"}},
+    )
+    historical_post = SourcePost(
+        "9", "1", "alice", "original", "old", datetime(2026, 8, 4, tzinfo=UTC),
+        "https://x.com/alice/status/9", {"id": "9"},
+    )
+    source = FakeSource({"alice": replacement}, {"1": [renamed_post, historical_post]})
+    service = _service(tmp_path, source, initial_post_limit=-1)
+    service.repository.upsert_account(original.x_user_id, original.username, original.display_name)
+
+    result = asyncio.run(service.sync_account("1"))
+
+    assert result.status == "success"
+    assert source.calls == [("fetch", "1")]
+    assert service.repository.get_account("1").current_username == "alice_new"
+    assert service.repository.get_account("2").current_username == "alice"
+
+
+def test_sync_rejects_posts_from_a_different_x_user_id(tmp_path) -> None:
+    account = SourceAccount("1", "alice", "Alice")
+    wrong_post = SourcePost(
+        "10", "2", "alice", "original", "wrong", datetime(2026, 8, 5, tzinfo=UTC),
+        "https://x.com/alice/status/10", {"id": "10"},
+    )
+    service = _service(tmp_path, FakeSource({"alice": account}, {"1": [wrong_post]}))
+
+    result = asyncio.run(service.sync_account("1"))
+
+    assert result.status == "error"
+    assert "source returned X user 2" in result.error
+    assert service.repository.get_post("10") is None

@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -13,7 +12,6 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    archive_accounts: Annotated[list[str], NoDecode] = Field(default_factory=list)
     twscrape_session_path: Path = Path("/data/twscrape")
     archive_db_path: Path = Path("/data/archive.sqlite3")
     archive_data_dir: Path = Path("/data/archive")
@@ -32,15 +30,6 @@ class Settings(BaseSettings):
     web_session_secret: str | None = Field(default=None, min_length=32)
     web_cookie_secure: bool = False
     log_level: str = "INFO"
-
-    @field_validator("archive_accounts", mode="before")
-    @classmethod
-    def split_accounts(cls, value: str | list[str] | None) -> list[str]:
-        if value is None or value == "":
-            return []
-        if isinstance(value, list):
-            return value
-        return [account.strip().lstrip("@") for account in value.split(",") if account.strip()]
 
     @field_validator("archive_incremental_known_post_limit")
     @classmethod

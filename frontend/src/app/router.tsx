@@ -47,7 +47,7 @@ const loginRoute = createRoute({
 
 const accountRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/accounts/$accountId",
+  path: "/accounts/$xUserId",
   component: AccountPage
 });
 
@@ -84,7 +84,7 @@ function AppShell() {
     queryFn: getAccounts,
     enabled: session.data?.authenticated === true
   });
-  const primaryAccountId = accounts.data?.[0]?.id;
+  const primaryAccountId = accounts.data?.[0]?.x_user_id;
   const primaryAccount = useQuery({
     queryKey: ["account", primaryAccountId],
     queryFn: () => getAccount(String(primaryAccountId)),
@@ -108,7 +108,7 @@ function AppShell() {
         account={primaryAccount.data}
         viewer={session.data?.user}
         onLogout={() => logout.mutate()}
-        onSwitchAccount={() => logout.mutate()}
+        onManageAccounts={() => void router.navigate({ to: "/accounts" })}
       />
       <main className="x-app-content"><Outlet /></main>
       <aside className="x-empty-rail x-empty-rail-right" aria-hidden="true" />

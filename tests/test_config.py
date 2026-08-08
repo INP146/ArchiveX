@@ -11,14 +11,13 @@ def test_required_settings_are_validated() -> None:
         Settings(_env_file=None)
 
 
-def test_accounts_are_normalized() -> None:
+def test_web_auth_username_is_normalized() -> None:
     settings = Settings(
         _env_file=None,
-        archive_accounts=" @first,second, ",
         archive_db_path="/tmp/archive.sqlite3",
         archive_data_dir="/tmp/archive",
         web_auth_token="test-token",
+        web_auth_username=" @archive_admin ",
     )
 
-    assert settings.archive_accounts == ["first", "second"]
-
+    assert settings.web_auth_username == "archive_admin"

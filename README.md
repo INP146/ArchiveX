@@ -1,6 +1,6 @@
 # ArchiveX
 
-ArchiveX is a self-hosted, read-only archive for selected X accounts. The current
+ArchiveX is a self-hosted archive for selected X accounts. The current
 foundation provides configuration validation, persistent local storage setup,
 a health endpoint, post synchronization, and local media downloads. It uses
 `twscrape` to discover posts and `gallery-dl` to download accessible media.
@@ -21,12 +21,12 @@ directory when recreating the container.
 ## Configuration
 
 All settings are documented in `.env.example`. `WEB_AUTH_TOKEN`,
-`ARCHIVE_DB_PATH`, and `ARCHIVE_DATA_DIR` are required. `ARCHIVE_ACCOUNTS` may
-be empty to run the web service without crawling.
+`ARCHIVE_DB_PATH`, and `ARCHIVE_DATA_DIR` are required. Archive targets are
+added in the Web UI and stored by stable X user ID.
 
-When accounts are configured, the application starts one sequential sync loop:
-it imports the configured history on the first run and then checks for updates
-at `ARCHIVE_SYNC_INTERVAL_SECONDS`. New posts create media download records;
+The application starts one sequential sync loop for accounts enabled in the
+database. It imports configured history on the first run and then checks for
+updates at `ARCHIVE_SYNC_INTERVAL_SECONDS`. New posts create media download records;
 failed media downloads are retried during later scans. Set
 `ARCHIVE_MEDIA_ENABLED=false` to archive post metadata without downloading
 files. `TWSCRAPE_SESSION_PATH` is either a
@@ -48,9 +48,14 @@ they are independent from the X accounts being archived.
 
 Protected routes expose archived accounts (`GET /api/accounts`), posts (`GET /api/posts` and
 `GET /api/posts/{tweet_id}`), downloaded media (`GET /api/media/{id}`), and sync
-history (`GET /api/sync-runs`). Post lists support `account_id`, `q`, `from`,
+history (`GET /api/sync-runs`). Post lists support `account_x_user_id`, `q`, `from`,
 `to`, `has_media`, `post_type`, `exclude_post_type`, `limit`, and `offset` query
 parameters. Post types are `original`, `reply`, `repost`, and `quote`.
+
+Account onboarding is a two-step operation. `POST /api/accounts/resolve` resolves
+a username or profile URL without persisting it. `POST /api/accounts` confirms
+the returned `x_user_id`. Account detail, pause/resume, manual sync, username
+history, post ownership, and archive paths all use the string `x_user_id`.
 
 ## Web frontend
 
@@ -85,8 +90,8 @@ Check that the account is active:
 .venv/bin/archivex-session --session-path ./data/twscrape status
 ```
 
-Then set `ARCHIVE_ACCOUNTS` to the public accounts to archive and start the
-service. These targets do not need to be the account used for the session.
+Then start ArchiveX and add public accounts from the Web account-management
+page. These targets do not need to be the account used for the session.
 
 ## Tests
 

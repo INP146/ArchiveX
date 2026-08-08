@@ -22,15 +22,15 @@ export function ArchiveSidebar({
   account,
   viewer,
   onLogout,
-  onSwitchAccount
+  onManageAccounts
 }: {
   account?: Account;
   viewer?: SessionUser | null;
   onLogout: () => void;
-  onSwitchAccount: () => void;
+  onManageAccounts: () => void;
 }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
-  const profilePath = account ? `/accounts/${account.id}` : "/";
+  const profilePath = account ? `/accounts/${account.x_user_id}` : "/";
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
 
   return (
@@ -44,14 +44,14 @@ export function ArchiveSidebar({
           <a href={`${profilePath}#media`} className="x-sidebar-item"><FiImage /><span>媒体库</span></a>
           <Link to="/sync-runs" className={`x-sidebar-item ${pathname === "/sync-runs" ? "is-active" : ""}`}><FiActivity /><span>同步记录</span></Link>
           {account
-            ? <a href={`/api/accounts/${account.id}`} target="_blank" rel="noreferrer" className="x-sidebar-item"><FiDatabase /><span>数据导出</span></a>
+            ? <a href={`/api/accounts/${account.x_user_id}`} target="_blank" rel="noreferrer" className="x-sidebar-item"><FiDatabase /><span>数据导出</span></a>
             : <span className="x-sidebar-item is-disabled"><FiDatabase /><span>数据导出</span></span>}
           <button type="button" className="x-sidebar-item"><FiSettings /><span>设置</span></button>
           <button type="button" className="x-sidebar-item"><FiMoreHorizontal /><span>更多</span></button>
         </nav>
 
         {account ? (
-          <a href={`/api/accounts/${account.id}`} target="_blank" rel="noreferrer" className="x-sidebar-primary">
+          <a href={`/api/accounts/${account.x_user_id}`} target="_blank" rel="noreferrer" className="x-sidebar-primary">
             <FiDownload /><span>导出归档</span>
           </a>
         ) : <span className="x-sidebar-primary is-disabled"><FiDownload /><span>导出归档</span></span>}
@@ -59,7 +59,7 @@ export function ArchiveSidebar({
         <div className="x-sidebar-account-wrap">
           {accountMenuOpen && (
             <div className="x-sidebar-account-menu">
-              <button type="button" onClick={onSwitchAccount}><FiUser /><span>添加已有账号</span></button>
+              <button type="button" onClick={onManageAccounts}><FiUser /><span>管理归档账号</span></button>
               <button type="button" onClick={onLogout}><FiLogOut /><span>登出 @{viewer?.username ?? "账户"}</span></button>
             </div>
           )}

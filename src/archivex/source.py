@@ -15,6 +15,8 @@ class SourceAccount:
     x_user_id: str
     username: str
     display_name: str | None
+    profile_image_url: str | None = None
+    description: str | None = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,8 @@ class TwscrapePostSource:
             x_user_id=str(user.id),
             username=user.username,
             display_name=user.displayname or None,
+            profile_image_url=user.profileImageUrl or None,
+            description=user.rawDescription or None,
         )
 
     async def fetch_timeline(self, x_user_id: str) -> AsyncIterator[SourcePost]:
@@ -67,7 +71,7 @@ class TwscrapePostSource:
             raw_payload = tweet.dict()
             yield SourcePost(
                 tweet_id=str(tweet.id),
-                x_user_id=x_user_id,
+                x_user_id=str(tweet.user.id),
                 username=tweet.user.username,
                 post_type=_post_type(tweet),
                 text=tweet.rawContent,
