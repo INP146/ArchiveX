@@ -23,6 +23,7 @@ import {
   PostMedia,
   POSTS_PAGE_SIZE
 } from "../../lib/api/posts";
+import { formatCount } from "../../lib/format-number";
 import "../accounts/account-page.css";
 
 export function PostTimeline({
@@ -188,11 +189,6 @@ function MediaGrid({ media }: { media: PostMedia[] }) {
 
 function PostMetric({ icon, value, label }: { icon: React.ReactNode; value: number | null; label: string }) {
   return <button className="x-post-metric" type="button" aria-label={label}>{icon}{value !== null && <span>{formatCount(value)}</span>}</button>;
-}
-
-function formatCount(value: number | null) {
-  if (value === null) return "0";
-  return new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
 function formatPostDate(value: string) {

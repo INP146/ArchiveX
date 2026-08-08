@@ -21,6 +21,7 @@ import {
 } from "../../lib/api/accounts";
 import { ApiError } from "../../lib/api/client";
 import { AccountTimelineTab } from "../../lib/api/posts";
+import { formatCount } from "../../lib/format-number";
 import { PostTimeline } from "../timeline/post-timeline";
 import "./account-page.css";
 
@@ -196,14 +197,6 @@ function PageError({ error }: { error: Error }) {
       {unauthenticated && <Link to="/login">去登录</Link>}
     </div>
   );
-}
-
-function formatCount(value: number | null) {
-  if (value === null) return "0";
-  return new Intl.NumberFormat("zh-CN", {
-    notation: "compact",
-    maximumFractionDigits: 1
-  }).format(value);
 }
 
 function formatJoined(value: string) {

@@ -12,6 +12,7 @@ import {
   ResolvedAccount
 } from "../../lib/api/accounts";
 import { ApiError } from "../../lib/api/client";
+import { formatCount } from "../../lib/format-number";
 import "./accounts-page.css";
 
 export function AccountsPage() {
@@ -189,11 +190,4 @@ function AccountsError({ error }: { error: Error }) {
       {unauthenticated && <Link to="/login">去登录</Link>}
     </div>
   );
-}
-
-function formatCount(value: number) {
-  return new Intl.NumberFormat("zh-CN", {
-    notation: "compact",
-    maximumFractionDigits: 1
-  }).format(value);
 }
