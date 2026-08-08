@@ -14,6 +14,7 @@ from archivex.api import create_api_router, create_auth_router
 from archivex.config import Settings, get_settings
 from archivex.logging import configure_logging
 from archivex.media import GalleryDlMediaDownloader
+from archivex.session import SessionAccountManager, TwscrapeSessionAccountManager
 from archivex.source import PostSource, TwscrapePostSource
 from archivex.storage import initialize_storage
 from archivex.storage import ArchiveRepository
@@ -22,10 +23,15 @@ from archivex.sync import ArchiveSyncService
 logger = logging.getLogger(__name__)
 
 
-def create_app(settings: Settings | None = None, post_source: PostSource | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, post_source: PostSource | None = None,
+               session_account_manager: SessionAccountManager | None = None) -> FastAPI:
     app_settings = settings or get_settings()
     repository = ArchiveRepository(app_settings.archive_db_path, app_settings.archive_data_dir)
     source = post_source or TwscrapePostSource(app_settings.twscrape_session_path)
+    session_accounts = (
+        session_account_manager
+        or TwscrapeSessionAccountManager(app_settings.twscrape_session_path)
+    )
     service = ArchiveSyncService(
         repository,
         source,
@@ -84,7 +90,7 @@ def create_app(settings: Settings | None = None, post_source: PostSource | None 
         app_settings.web_auth_avatar_url,
     ))
     app.include_router(create_api_router(
-        repository, app_settings.web_auth_token, source, service
+        repository, app_settings.web_auth_token, source, service, session_accounts
     ))
 
     @app.get("/health", tags=["system"])

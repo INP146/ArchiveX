@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from archivex.config import Settings
 from archivex.main import create_app
+from archivex.session import SessionAccountSummary
 from archivex.source import SourceAccount, SourcePost
 from archivex.storage import ArchiveRepository, MediaInput, PostInput
 
@@ -23,6 +24,28 @@ class FakeSource:
         self.calls.append(("fetch", x_user_id))
         for post in self.posts.get(x_user_id, []):
             yield post
+
+
+class FakeSessionAccountManager:
+    def __init__(self):
+        self.proxy = None
+
+    async def list_accounts(self):
+        return [SessionAccountSummary(
+            username="pni146",
+            active=True,
+            proxy_configured=self.proxy is not None,
+            proxy_url="http://***@proxy.test:8080" if self.proxy else None,
+            last_used="2026-08-08T09:45:41+00:00",
+            total_requests=661,
+        )]
+
+    async def set_proxy(self, username, proxy):
+        if username != "pni146":
+            return None
+        from archivex.session import normalize_http_proxy
+        self.proxy = normalize_http_proxy(proxy) if proxy is not None else None
+        return (await self.list_accounts())[0]
 
 
 def _settings(tmp_path) -> Settings:
@@ -122,6 +145,49 @@ def test_browser_session_authentication_does_not_expose_the_token(tmp_path) -> N
         assert client.get("/api/accounts").status_code == 200
         assert client.delete("/api/auth/session").status_code == 204
         assert client.get("/api/accounts").status_code == 401
+
+
+def test_crawler_account_proxy_can_be_assigned_and_cleared(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    manager = FakeSessionAccountManager()
+    with TestClient(create_app(settings, FakeSource(), manager)) as client:
+        headers = {"Authorization": "Bearer test-token"}
+        accounts = client.get("/api/crawler-accounts", headers=headers)
+        assert accounts.status_code == 200
+        assert accounts.json() == [{
+            "username": "pni146",
+            "active": True,
+            "proxy_configured": False,
+            "proxy_url": None,
+            "last_used": "2026-08-08T09:45:41+00:00",
+            "total_requests": 661,
+        }]
+
+        updated = client.patch(
+            "/api/crawler-accounts/pni146",
+            json={"proxy": "http://user:secret@proxy.test:8080"},
+            headers=headers,
+        )
+        assert updated.status_code == 200
+        assert updated.json()["proxy_url"] == "http://***@proxy.test:8080"
+        assert manager.proxy == "http://user:secret@proxy.test:8080"
+
+        invalid = client.patch(
+            "/api/crawler-accounts/pni146",
+            json={"proxy": "socks5://proxy.test:1080"},
+            headers=headers,
+        )
+        assert invalid.status_code == 422
+        assert "http://host:port" in invalid.json()["detail"]
+
+        cleared = client.patch(
+            "/api/crawler-accounts/pni146", json={"proxy": None}, headers=headers
+        )
+        assert cleared.status_code == 200
+        assert cleared.json()["proxy_configured"] is False
+        assert client.patch(
+            "/api/crawler-accounts/missing", json={"proxy": None}, headers=headers
+        ).status_code == 404
 
 
 def test_archive_api_filters_post_types_and_paginates(tmp_path) -> None:

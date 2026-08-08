@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
+from archivex.session import SessionAccountManager
 from archivex.storage import ArchiveMedia, ArchiveRepository
 from archivex.source import PostSource
 from archivex.sync import ArchiveSyncService
@@ -35,6 +36,10 @@ class AddAccountRequest(BaseModel):
 
 class UpdateAccountRequest(BaseModel):
     archive_enabled: bool
+
+
+class UpdateCrawlerAccountRequest(BaseModel):
+    proxy: str | None = Field(default=None, max_length=2048)
 
 
 def create_auth_router(auth_token: str, display_name: str, username: str,
@@ -70,12 +75,32 @@ def create_auth_router(auth_token: str, display_name: str, username: str,
 
 
 def create_api_router(repository: ArchiveRepository, auth_token: str, source: PostSource,
-                      sync_service: ArchiveSyncService) -> APIRouter:
+                      sync_service: ArchiveSyncService,
+                      session_accounts: SessionAccountManager) -> APIRouter:
     router = APIRouter(prefix="/api", dependencies=[Depends(_require_token(auth_token))])
 
     @router.get("/accounts")
     def list_accounts() -> list[dict[str, Any]]:
         return repository.list_accounts()
+
+    @router.get("/crawler-accounts")
+    async def list_crawler_accounts() -> list[dict[str, Any]]:
+        accounts = await session_accounts.list_accounts()
+        return [account.__dict__ for account in accounts]
+
+    @router.patch("/crawler-accounts/{username}")
+    async def update_crawler_account(
+        username: str, payload: UpdateCrawlerAccountRequest
+    ) -> dict[str, Any]:
+        if not re.fullmatch(r"[A-Za-z0-9_]{1,64}", username):
+            raise HTTPException(status_code=422, detail="invalid twscrape account username")
+        try:
+            account = await session_accounts.set_proxy(username, payload.proxy)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if account is None:
+            raise HTTPException(status_code=404, detail="twscrape account not found")
+        return account.__dict__
 
     @router.post("/accounts/resolve")
     async def resolve_account(payload: ResolveAccountRequest) -> dict[str, Any]:

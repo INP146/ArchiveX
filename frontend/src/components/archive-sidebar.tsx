@@ -46,7 +46,7 @@ export function ArchiveSidebar({
           {account
             ? <a href={`/api/accounts/${account.x_user_id}`} target="_blank" rel="noreferrer" className="x-sidebar-item"><FiDatabase /><span>数据导出</span></a>
             : <span className="x-sidebar-item is-disabled"><FiDatabase /><span>数据导出</span></span>}
-          <button type="button" className="x-sidebar-item"><FiSettings /><span>设置</span></button>
+          <Link to="/settings" className={`x-sidebar-item ${pathname === "/settings" ? "is-active" : ""}`}><FiSettings /><span>设置</span></Link>
           <button type="button" className="x-sidebar-item"><FiMoreHorizontal /><span>更多</span></button>
         </nav>
 

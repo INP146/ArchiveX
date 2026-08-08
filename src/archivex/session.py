@@ -2,13 +2,47 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import os
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Protocol, Sequence
+from urllib.parse import urlsplit, urlunsplit
 
 from twscrape import AccountsPool
+from twscrape.db import execute as execute_twscrape_query
+
+
+@dataclass(frozen=True)
+class SessionAccountSummary:
+    username: str
+    active: bool
+    proxy_configured: bool
+    proxy_url: str | None
+    last_used: str | None
+    total_requests: int
+
+
+class SessionAccountManager(Protocol):
+    async def list_accounts(self) -> list[SessionAccountSummary]: ...
+
+    async def set_proxy(self, username: str, proxy: str | None) -> SessionAccountSummary | None: ...
+
+
+class TwscrapeSessionAccountManager:
+    def __init__(self, session_path: Path) -> None:
+        self.pool = AccountsPool(str(session_database_path(session_path)))
+
+    async def list_accounts(self) -> list[SessionAccountSummary]:
+        accounts = await self.pool.get_all()
+        return sorted((_session_account_summary(account) for account in accounts),
+                      key=lambda account: account.username.casefold())
+
+    async def set_proxy(self, username: str,
+                        proxy: str | None) -> SessionAccountSummary | None:
+        return await set_pool_account_proxy(self.pool, username, proxy)
 
 
 def session_database_path(session_path: Path) -> Path:
@@ -47,6 +81,73 @@ async def login_with_credentials(
 async def session_status(pool: AccountsPool) -> tuple[int, int]:
     accounts = await pool.get_all()
     return len(accounts), sum(account.active for account in accounts)
+
+
+async def set_pool_account_proxy(
+    pool: AccountsPool, username: str, proxy: str | None
+) -> SessionAccountSummary | None:
+    account = await pool.get_account(username)
+    if account is None:
+        return None
+    normalized = normalize_http_proxy(proxy) if proxy is not None else None
+    database_path = getattr(pool, "_db_file", None)
+    if database_path is not None:
+        # Update only the proxy so an in-flight crawler cannot lose lock or stats changes.
+        await execute_twscrape_query(
+            database_path,
+            "UPDATE accounts SET proxy = :proxy WHERE username = :username",
+            {"proxy": normalized, "username": username},
+        )
+        account = await pool.get_account(username)
+    else:
+        account.proxy = normalized
+        await pool.save(account)
+    return _session_account_summary(account)
+
+
+def normalize_http_proxy(value: str) -> str:
+    proxy = value.strip()
+    if not proxy or any(character.isspace() for character in proxy):
+        raise ValueError("HTTP proxy URL is empty or contains whitespace")
+    parsed = urlsplit(proxy)
+    if parsed.scheme.lower() != "http" or parsed.hostname is None:
+        raise ValueError("HTTP proxy must use http://host:port")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError("HTTP proxy has an invalid port") from exc
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        raise ValueError("HTTP proxy URL cannot contain a path, query, or fragment")
+    return urlunsplit(("http", parsed.netloc, "", "", ""))
+
+
+def mask_http_proxy(value: str | None) -> str | None:
+    if not value:
+        return None
+    parsed = urlsplit(value)
+    host = parsed.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    try:
+        port = f":{parsed.port}" if parsed.port is not None else ""
+    except ValueError:
+        port = ""
+    credentials = "***@" if parsed.username is not None else ""
+    return urlunsplit((parsed.scheme or "http", f"{credentials}{host}{port}", "", "", ""))
+
+
+def _session_account_summary(account: object) -> SessionAccountSummary:
+    proxy = getattr(account, "proxy", None)
+    last_used = getattr(account, "last_used", None)
+    stats = getattr(account, "stats", {})
+    return SessionAccountSummary(
+        username=str(getattr(account, "username")),
+        active=bool(getattr(account, "active", False)),
+        proxy_configured=bool(proxy),
+        proxy_url=mask_http_proxy(proxy),
+        last_used=last_used.isoformat() if last_used else None,
+        total_requests=sum(value for value in stats.values() if isinstance(value, int)),
+    )
 
 
 def cookies_from_clipboard(timeout_seconds: float = 120, poll_interval: float = 0.25) -> str:
@@ -93,6 +194,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     login.add_argument("--username", required=True, help="Your X login username")
     login.add_argument("--replace", action="store_true", help="Replace this existing session")
 
+    proxy = commands.add_parser("proxy", help="Set the HTTP proxy for a twscrape account")
+    proxy.add_argument("--username", required=True, help="Existing twscrape account username")
+    proxy_action = proxy.add_mutually_exclusive_group()
+    proxy_action.add_argument("--url", help="HTTP proxy URL (prefer the interactive prompt)")
+    proxy_action.add_argument("--clear", action="store_true", help="Remove the assigned proxy")
+
     commands.add_parser("status")
     args = parser.parse_args(argv)
     database_path = session_database_path(args.session_path)
@@ -132,6 +239,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             _restrict_permissions(database_path)
             print("Session saved." if active else "Login did not create an active session.")
             return 0 if active else 1
+        if args.command == "proxy":
+            proxy_value = None if args.clear else normalize_http_proxy(
+                args.url or getpass.getpass("HTTP proxy URL: ")
+            )
+            updated = asyncio.run(set_pool_account_proxy(pool, args.username, proxy_value))
+            if updated is None:
+                raise ValueError("twscrape account not found")
+            _restrict_permissions(database_path)
+            print(
+                "Proxy cleared."
+                if proxy_value is None
+                else f"Proxy saved: {mask_http_proxy(proxy_value)}"
+            )
+            return 0
         total, active = asyncio.run(session_status(pool))
         _restrict_permissions(database_path)
         print(f"Sessions: {total}; active: {active}")

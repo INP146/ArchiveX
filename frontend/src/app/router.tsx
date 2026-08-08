@@ -14,6 +14,7 @@ import { AccountsPage } from "../features/accounts/accounts-page";
 import { LoginPage } from "../features/auth/login-page";
 import { DashboardPage } from "../features/dashboard/dashboard-page";
 import { SyncRunsPage } from "../features/sync-runs/sync-runs-page";
+import { SettingsPage } from "../features/settings/settings-page";
 import { ArchiveSidebar } from "../components/archive-sidebar";
 import { getAccount, getAccounts } from "../lib/api/accounts";
 import { deleteSession, getSession } from "../lib/api/auth";
@@ -63,7 +64,20 @@ const syncRunsRoute = createRoute({
   component: SyncRunsPage
 });
 
-const routeTree = rootRoute.addChildren([dashboardRoute, loginRoute, accountsRoute, accountRoute, syncRunsRoute]);
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings",
+  component: SettingsPage
+});
+
+const routeTree = rootRoute.addChildren([
+  dashboardRoute,
+  loginRoute,
+  accountsRoute,
+  accountRoute,
+  syncRunsRoute,
+  settingsRoute
+]);
 
 export const router = createRouter({
   routeTree,

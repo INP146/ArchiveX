@@ -52,6 +52,13 @@ history (`GET /api/sync-runs`). Post lists support `account_x_user_id`, `q`, `fr
 `to`, `has_media`, `post_type`, `exclude_post_type`, `limit`, and `offset` query
 parameters. Post types are `original`, `reply`, `repost`, and `quote`.
 
+The protected `GET /api/crawler-accounts` endpoint lists twscrape login
+accounts without exposing cookies or proxy credentials. Assign or clear an
+account-specific HTTP proxy with `PATCH /api/crawler-accounts/{username}` and a
+JSON body such as `{"proxy":"http://user:pass@host:port"}` or `{"proxy":null}`.
+The Web **Settings** page provides the same controls and only displays a masked
+proxy URL after it is saved.
+
 Account onboarding is a two-step operation. `POST /api/accounts/resolve` resolves
 a username or profile URL without persisting it. `POST /api/accounts` confirms
 the returned `x_user_id` and immediately starts its initial synchronization in
@@ -90,6 +97,16 @@ Check that the account is active:
 ```sh
 .venv/bin/archivex-session --session-path ./data/twscrape status
 ```
+
+An HTTP proxy can also be assigned to an existing twscrape login account. The
+interactive prompt keeps credentials out of shell history:
+
+```sh
+.venv/bin/archivex-session --session-path ./data/twscrape proxy --username pni146
+```
+
+Use `proxy --username pni146 --clear` to return that account to a direct
+connection.
 
 Then start ArchiveX and add public accounts from the Web account-management
 page. These targets do not need to be the account used for the session.
