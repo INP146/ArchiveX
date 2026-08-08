@@ -1,33 +1,294 @@
 #!/usr/bin/env python3
-"""Start the ArchiveX backend development server."""
+"""Start the complete ArchiveX local development stack."""
+
+from __future__ import annotations
+
+import json
 import os
+import shutil
+import signal
+import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 
-def main() -> None:
-    script_dir = Path(__file__).parent
-    project_root = script_dir.parent
-    venv_path = project_root / ".venv"
+@dataclass(frozen=True)
+class ProcessSpec:
+    name: str
+    command: tuple[str, ...]
+    cwd: Path
+    env: dict[str, str] = field(default_factory=dict)
 
-    if not venv_path.exists():
-        print("Virtual environment not found. Run scripts/setup_venv.py first.", file=sys.stderr)
-        sys.exit(1)
 
-    archivex_cmd = venv_path / "bin" / "archivex"
+def project_root() -> Path:
+    return Path(__file__).resolve().parent.parent
 
-    if not archivex_cmd.exists():
-        print("archivex command not found. Run:", file=sys.stderr)
-        print("  source .venv/bin/activate", file=sys.stderr)
-        print("  pip install -e .", file=sys.stderr)
-        sys.exit(1)
 
-    print("Starting ArchiveX backend...", flush=True)
-    env = os.environ.copy()
-    env["PATH"] = os.pathsep.join((str(venv_path / "bin"), env.get("PATH", "")))
-    os.chdir(project_root)
-    os.execve(archivex_cmd, [str(archivex_cmd)], env)
+def validate_project(root: Path) -> tuple[Path, str]:
+    venv_bin = root / ".venv" / "bin"
+    required_paths = (
+        root / ".env",
+        venv_bin / "python",
+        venv_bin / "archivex",
+        venv_bin / "taskiq",
+        root / "frontend" / "package.json",
+        root / "frontend" / "node_modules",
+    )
+    missing = [path for path in required_paths if not path.exists()]
+    if missing:
+        formatted = "\n".join(f"  - {path.relative_to(root)}" for path in missing)
+        raise RuntimeError(
+            f"Local development environment is incomplete:\n{formatted}\n"
+            "Run scripts/setup_venv.py first."
+        )
+
+    npm = shutil.which("npm")
+    if npm is None:
+        raise RuntimeError("npm was not found. Install Node.js and run scripts/setup_venv.py.")
+    return venv_bin, npm
+
+
+def build_process_specs(root: Path, venv_bin: Path, npm: str) -> tuple[ProcessSpec, ...]:
+    taskiq = str(venv_bin / "taskiq")
+    worker_base = ("worker", "archivex.tasks:broker", "--workers", "1")
+    return (
+        ProcessSpec("api", (str(venv_bin / "archivex"),), root),
+        ProcessSpec(
+            "crawl-worker",
+            (
+                taskiq,
+                *worker_base,
+                "--max-async-tasks",
+                "1",
+                "--max-prefetch",
+                "1",
+                "--shutdown-timeout",
+                "30",
+            ),
+            root,
+            {"TASK_WORKER_QUEUE_NAME": "archivex:crawl"},
+        ),
+        ProcessSpec(
+            "media-worker",
+            (
+                taskiq,
+                *worker_base,
+                "--max-async-tasks",
+                "4",
+                "--max-prefetch",
+                "4",
+                "--shutdown-timeout",
+                "30",
+            ),
+            root,
+            {"TASK_WORKER_QUEUE_NAME": "archivex:media"},
+        ),
+        ProcessSpec(
+            "scheduler",
+            (taskiq, "scheduler", "archivex.tasks:scheduler"),
+            root,
+            {"TASK_WORKER_QUEUE_NAME": "archivex:crawl"},
+        ),
+        ProcessSpec(
+            "web",
+            (npm, "run", "dev", "--", "--host", "--strictPort"),
+            root / "frontend",
+        ),
+    )
+
+
+def read_runtime_settings(root: Path, python: Path, env: dict[str, str]) -> dict[str, object]:
+    code = (
+        "import json; "
+        "from archivex.config import get_settings; "
+        "s = get_settings(); "
+        "print(json.dumps({'web_port': s.web_port}))"
+    )
+    result = subprocess.run(
+        [str(python), "-c", code],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def check_redis(root: Path, python: Path, env: dict[str, str]) -> None:
+    code = (
+        "from redis import Redis; "
+        "from archivex.config import get_settings; "
+        "client = Redis.from_url(get_settings().task_redis_url, "
+        "socket_connect_timeout=2, socket_timeout=2); "
+        "assert client.ping(); client.close()"
+    )
+    subprocess.run(
+        [str(python), "-c", code],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+def start_process(spec: ProcessSpec, base_env: dict[str, str]) -> subprocess.Popen:
+    env = {**base_env, **spec.env}
+    process = subprocess.Popen(
+        spec.command,
+        cwd=spec.cwd,
+        env=env,
+        start_new_session=os.name == "posix",
+    )
+    print(f"Started {spec.name} (PID {process.pid})", flush=True)
+    return process
+
+
+def wait_for_api(
+    process: subprocess.Popen,
+    port: int,
+    should_stop: Callable[[], bool],
+    timeout_seconds: float = 30,
+) -> bool:
+    url = f"http://127.0.0.1:{port}/health"
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline and not should_stop():
+        if process.poll() is not None:
+            return False
+        try:
+            with urllib.request.urlopen(url, timeout=0.5) as response:
+                if response.status == 200:
+                    return True
+        except (OSError, urllib.error.URLError):
+            pass
+        time.sleep(0.2)
+    return False
+
+
+def signal_process(process: subprocess.Popen, signum: int) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signum)
+        else:
+            process.send_signal(signum)
+    except ProcessLookupError:
+        pass
+
+
+def stop_processes(processes: list[tuple[ProcessSpec, subprocess.Popen]]) -> None:
+    for _, process in reversed(processes):
+        signal_process(process, signal.SIGTERM)
+
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if all(process.poll() is not None for _, process in processes):
+            return
+        time.sleep(0.1)
+
+    for spec, process in reversed(processes):
+        if process.poll() is None:
+            print(f"Force-stopping {spec.name} (PID {process.pid})", file=sys.stderr)
+            signal_process(process, signal.SIGKILL)
+
+
+def main() -> int:
+    root = project_root()
+    try:
+        venv_bin, npm = validate_project(root)
+    except RuntimeError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    base_env = os.environ.copy()
+    base_env["PATH"] = os.pathsep.join((str(venv_bin), base_env.get("PATH", "")))
+    base_env["PYTHONUNBUFFERED"] = "1"
+    base_env["TASK_QUEUE_ENABLED"] = "true"
+    base_env["TASK_WORKER_QUEUE_NAME"] = "archivex:crawl"
+
+    try:
+        runtime = read_runtime_settings(root, venv_bin / "python", base_env)
+        check_redis(root, venv_bin / "python", base_env)
+    except (subprocess.CalledProcessError, ValueError, json.JSONDecodeError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        print(f"Local configuration or Redis check failed: {detail.strip()}", file=sys.stderr)
+        print("Start the host Redis configured by TASK_REDIS_URL, then try again.", file=sys.stderr)
+        return 1
+
+    specs = build_process_specs(root, venv_bin, npm)
+    processes: list[tuple[ProcessSpec, subprocess.Popen]] = []
+    requested_signal: int | None = None
+
+    def request_shutdown(signum: int, _frame: object) -> None:
+        nonlocal requested_signal
+        requested_signal = requested_signal or signum
+
+    previous_handlers = {
+        signum: signal.signal(signum, request_shutdown)
+        for signum in (signal.SIGINT, signal.SIGTERM)
+    }
+
+    exit_code = 0
+    try:
+        api_spec = specs[0]
+        api_process = start_process(api_spec, base_env)
+        processes.append((api_spec, api_process))
+        if not wait_for_api(
+            api_process,
+            int(runtime["web_port"]),
+            lambda: requested_signal is not None,
+        ):
+            if requested_signal is None:
+                print("API did not become healthy within 30 seconds.", file=sys.stderr)
+                exit_code = api_process.returncode or 1
+        else:
+            for spec in specs[1:]:
+                process = start_process(spec, base_env)
+                processes.append((spec, process))
+
+            print(
+                "ArchiveX local development stack is ready at http://localhost:5173",
+                flush=True,
+            )
+            while requested_signal is None:
+                stopped = next(
+                    (
+                        (spec, process)
+                        for spec, process in processes
+                        if process.poll() is not None
+                    ),
+                    None,
+                )
+                if stopped is not None:
+                    spec, process = stopped
+                    print(
+                        f"{spec.name} exited unexpectedly with code {process.returncode}.",
+                        file=sys.stderr,
+                    )
+                    exit_code = process.returncode or 1
+                    break
+                time.sleep(0.25)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"Could not start the local stack: {exc}", file=sys.stderr)
+        exit_code = 1
+    finally:
+        if processes:
+            print("Stopping ArchiveX development processes...", flush=True)
+            stop_processes(processes)
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+
+    if requested_signal is not None:
+        return 128 + requested_signal
+    return exit_code
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

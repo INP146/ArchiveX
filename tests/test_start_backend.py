@@ -1,5 +1,5 @@
 import importlib.util
-import os
+import sys
 from pathlib import Path
 
 
@@ -7,36 +7,74 @@ SCRIPT_PATH = Path(__file__).parents[1] / "scripts" / "start_backend.py"
 SPEC = importlib.util.spec_from_file_location("start_backend", SCRIPT_PATH)
 assert SPEC is not None and SPEC.loader is not None
 start_backend = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = start_backend
 SPEC.loader.exec_module(start_backend)
 
 
-def test_start_backend_adds_virtualenv_bin_to_path(tmp_path, monkeypatch) -> None:
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    archivex_cmd = tmp_path / ".venv" / "bin" / "archivex"
-    archivex_cmd.parent.mkdir(parents=True)
-    archivex_cmd.touch()
-    monkeypatch.setattr(start_backend, "__file__", str(scripts_dir / "start_backend.py"))
-    monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin")
+def test_process_specs_start_complete_local_stack(tmp_path) -> None:
+    venv_bin = tmp_path / ".venv" / "bin"
+    specs = start_backend.build_process_specs(tmp_path, venv_bin, "/usr/local/bin/npm")
+    by_name = {spec.name: spec for spec in specs}
 
+    assert list(by_name) == ["api", "crawl-worker", "media-worker", "scheduler", "web"]
+    assert by_name["api"].command == (str(venv_bin / "archivex"),)
+    assert by_name["crawl-worker"].env == {
+        "TASK_WORKER_QUEUE_NAME": "archivex:crawl"
+    }
+    assert by_name["media-worker"].env == {
+        "TASK_WORKER_QUEUE_NAME": "archivex:media"
+    }
+    assert by_name["scheduler"].env == {
+        "TASK_WORKER_QUEUE_NAME": "archivex:crawl"
+    }
+    assert by_name["web"].command == (
+        "/usr/local/bin/npm",
+        "run",
+        "dev",
+        "--",
+        "--host",
+        "--strictPort",
+    )
+    assert by_name["web"].cwd == tmp_path / "frontend"
+
+
+def test_validate_project_reports_setup_when_dependencies_are_missing(tmp_path) -> None:
+    try:
+        start_backend.validate_project(tmp_path)
+    except RuntimeError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("validate_project should reject an incomplete checkout")
+
+    assert ".env" in message
+    assert ".venv/bin/archivex" in message
+    assert "scripts/setup_venv.py" in message
+
+
+def test_start_process_applies_only_its_environment_overrides(monkeypatch, tmp_path) -> None:
     invocation = {}
 
-    def capture_chdir(cwd):
-        invocation["cwd"] = cwd
+    class FakeProcess:
+        pid = 12345
 
-    def capture_execve(executable, arguments, env):
-        invocation.update(executable=executable, arguments=arguments, env=env)
+    def fake_popen(command, **kwargs):
+        invocation.update(command=command, **kwargs)
+        return FakeProcess()
 
-    monkeypatch.setattr(start_backend.os, "chdir", capture_chdir)
-    monkeypatch.setattr(start_backend.os, "execve", capture_execve)
+    monkeypatch.setattr(start_backend.subprocess, "Popen", fake_popen)
+    spec = start_backend.ProcessSpec(
+        "media-worker",
+        ("taskiq", "worker"),
+        tmp_path,
+        {"TASK_WORKER_QUEUE_NAME": "archivex:media"},
+    )
 
-    start_backend.main()
+    start_backend.start_process(spec, {"PATH": "/bin", "KEEP": "yes"})
 
-    assert invocation["executable"] == archivex_cmd
-    assert invocation["arguments"] == [str(archivex_cmd)]
+    assert invocation["command"] == spec.command
     assert invocation["cwd"] == tmp_path
-    assert invocation["env"]["PATH"].split(os.pathsep) == [
-        str(archivex_cmd.parent),
-        "/usr/local/bin",
-        "/usr/bin",
-    ]
+    assert invocation["env"] == {
+        "PATH": "/bin",
+        "KEEP": "yes",
+        "TASK_WORKER_QUEUE_NAME": "archivex:media",
+    }

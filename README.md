@@ -8,17 +8,19 @@ a health endpoint, post synchronization, and local media downloads. It uses
 ## Local development
 
 ```sh
-cp .env.example .env
-.venv/bin/archivex
-.venv/bin/taskiq worker archivex.tasks:broker --workers 1 --max-async-tasks 1 --max-prefetch 1
-TASK_WORKER_QUEUE_NAME=archivex:media .venv/bin/taskiq worker archivex.tasks:broker --workers 1 --max-async-tasks 4 --max-prefetch 4
-.venv/bin/taskiq scheduler archivex.tasks:scheduler
+python3 scripts/setup_venv.py
+python3 scripts/start_backend.py
 ```
 
-Run each command in a separate terminal and use a host Redis instance configured
-by `TASK_REDIS_URL` (the default is `redis://127.0.0.1:6379/0`). Only one
-scheduler process may run. Open `http://localhost:<WEB_PORT>/health` after the
-processes start.
+The setup script creates `.env` from `.env.example` only when it is missing,
+updates the editable Python development dependencies, and installs the locked
+frontend dependencies. It never overwrites an existing `.env`.
+
+The start script checks the host Redis instance configured by `TASK_REDIS_URL`
+(the default is `redis://127.0.0.1:6379/0`), then starts the API, crawl worker,
+media worker, single scheduler, and Vite frontend. Open
+`http://localhost:5173`. Press `Ctrl+C` to stop only those five development
+processes; the host Redis process is not managed by this script.
 
 ## Docker Compose deployment
 
@@ -120,11 +122,12 @@ The API no longer starts an in-process periodic synchronization loop.
 ## Web frontend
 
 The React frontend lives in `frontend/`. It uses Vite, TypeScript, TanStack
-Router, TanStack Query, and Tailwind CSS. Start the API, then run:
+Router, TanStack Query, and Tailwind CSS. The local start script launches it
+with the rest of the development stack. To run it separately for frontend-only
+work, use:
 
 ```sh
 cd frontend
-npm install
 npm run dev
 ```
 
