@@ -101,18 +101,51 @@ def _post_type(tweet: Any) -> str:
 
 
 def media_from_payload(payload: Mapping[str, Any]) -> tuple[SourceMedia, ...]:
-    """Extract downloadable media from twscrape's serializable tweet payload."""
-    media = payload.get("media") or {}
-    items = [
-        SourceMedia("image", photo["url"])
-        for photo in media.get("photos", []) if photo.get("url")
-    ]
-    items.extend(
-        SourceMedia("video", max(video["variants"], key=lambda variant: variant["bitrate"])["url"])
-        for video in media.get("videos", []) if video.get("variants")
-    )
-    items.extend(
-        SourceMedia("gif", animated["videoUrl"])
-        for animated in media.get("animated", []) if animated.get("videoUrl")
-    )
+    """Extract downloadable media from a tweet and its embedded tweet payloads."""
+    items: list[SourceMedia] = []
+    seen_urls: set[str] = set()
+
+    def append(media_type: str, source_url: object) -> None:
+        if not isinstance(source_url, str) or not source_url or source_url in seen_urls:
+            return
+        seen_urls.add(source_url)
+        items.append(SourceMedia(media_type, source_url))
+
+    def extract(tweet: Mapping[str, Any]) -> None:
+        media = tweet.get("media")
+        if isinstance(media, Mapping):
+            photos = media.get("photos")
+            if isinstance(photos, list):
+                for photo in photos:
+                    if isinstance(photo, Mapping):
+                        append("image", photo.get("url"))
+
+            videos = media.get("videos")
+            if isinstance(videos, list):
+                for video in videos:
+                    if not isinstance(video, Mapping):
+                        continue
+                    variants = video.get("variants")
+                    if not isinstance(variants, list):
+                        continue
+                    downloadable = [
+                        variant for variant in variants
+                        if isinstance(variant, Mapping) and isinstance(variant.get("url"), str)
+                    ]
+                    if downloadable:
+                        best = max(downloadable, key=lambda variant: variant.get("bitrate") or -1)
+                        append("video", best.get("url"))
+
+            animated_items = media.get("animated")
+            if isinstance(animated_items, list):
+                for animated in animated_items:
+                    if isinstance(animated, Mapping):
+                        append("gif", animated.get("videoUrl"))
+
+        for field in ("retweetedTweet", "quotedTweet"):
+            embedded = tweet.get(field)
+            if isinstance(embedded, Mapping):
+                extract(embedded)
+
+    extract(payload)
     return tuple(items)

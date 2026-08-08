@@ -302,10 +302,13 @@ def test_existing_posts_are_backfilled_from_their_raw_payload(tmp_path) -> None:
     service = _service(tmp_path, source, downloader=downloader)
     archived_account = service.repository.upsert_account("1", "first", "First")
     service.repository.upsert_post(PostInput(
-        "2", archived_account.x_user_id, "original", "post", datetime(2026, 8, 5, tzinfo=UTC),
+        "2", archived_account.x_user_id, "repost", "post", datetime(2026, 8, 5, tzinfo=UTC),
         "https://x.com/first/status/2", {
-            "media": {"photos": [{"url": "https://pbs.twimg.com/media/example.jpg"}],
-                      "videos": [], "animated": []}
+            "media": {},
+            "retweetedTweet": {
+                "media": {"photos": [{"url": "https://pbs.twimg.com/media/example.jpg"}],
+                          "videos": [], "animated": []}
+            },
         },
     ))
 

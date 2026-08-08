@@ -16,6 +16,10 @@ class DownloadResult:
     sha256: str
 
 
+class PermanentMediaDownloadError(RuntimeError):
+    """A source response that should only be retried by explicit user action."""
+
+
 class MediaDownloader(Protocol):
     def download(self, source_url: str, target_dir: Path, max_bytes: int) -> DownloadResult: ...
 
@@ -53,9 +57,13 @@ class GalleryDlMediaDownloader:
                 ) from exc
             if completed.returncode != 0:
                 detail = completed.stderr.strip() or completed.stdout.strip()
-                raise RuntimeError(
-                    _safe_error(detail or f"gallery-dl exited with status {completed.returncode}")
+                detail = detail or f"gallery-dl exited with status {completed.returncode}"
+                error_type = (
+                    PermanentMediaDownloadError
+                    if _is_permanent_download_error(detail)
+                    else RuntimeError
                 )
+                raise error_type(_safe_error(detail))
 
             downloaded = [
                 path
@@ -89,3 +97,11 @@ def _sha256(path: Path) -> str:
 def _safe_error(message: str) -> str:
     """Avoid persisting signed media URLs in the database error field."""
     return re.sub(r"https?://[^\s]+", "[media URL omitted]", message)
+
+
+def _is_permanent_download_error(message: str) -> bool:
+    return bool(re.search(
+        r"\b(?:401\s+Unauthorized|403\s+Forbidden|404\s+Not\s+Found)\b",
+        message,
+        re.IGNORECASE,
+    ))

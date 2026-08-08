@@ -9,13 +9,15 @@ from urllib.parse import urljoin
 
 from redis.asyncio import Redis
 from taskiq import Context, TaskiqDepends, TaskiqScheduler
+from taskiq.exceptions import NoResultError
 from taskiq.message import TaskiqMessage
 from taskiq.middlewares import SmartRetryMiddleware, TaskiqAdminMiddleware
+from taskiq.result import TaskiqResult
 from taskiq.schedule_sources import LabelScheduleSource
 from taskiq_redis import ListRedisScheduleSource, RedisAsyncResultBackend, RedisStreamBroker
 
 from archivex.config import Settings, get_settings
-from archivex.media import GalleryDlMediaDownloader
+from archivex.media import GalleryDlMediaDownloader, PermanentMediaDownloadError
 from archivex.source import TwscrapePostSource
 from archivex.storage import ArchiveRepository
 from archivex.sync import ArchiveSyncService
@@ -24,6 +26,15 @@ from archivex.task_dispatcher import TaskSubmission
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+_REDIS_SOCKET_TIMEOUT_SECONDS = 5
+_RETRY_SCHEDULE_TIMEOUT_SECONDS = 12
+_REDIS_CONNECTION_KWARGS = {
+    "health_check_interval": 30,
+    "socket_connect_timeout": _REDIS_SOCKET_TIMEOUT_SECONDS,
+    "socket_timeout": _REDIS_SOCKET_TIMEOUT_SECONDS,
+    "retry_on_timeout": True,
+}
 
 _DELETE_OWNED_LOCK = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
@@ -51,10 +62,51 @@ class MountedTaskiqAdminMiddleware(TaskiqAdminMiddleware):
 
     async def pre_send(self, message: TaskiqMessage) -> TaskiqMessage:
         await super().post_send(message)
+        if "_retries" in message.labels:
+            _task_center_repository().reset_retried_task(message.task_id)
         return message
 
     async def post_send(self, message: TaskiqMessage) -> None:
         pass
+
+    async def pre_execute(self, message: TaskiqMessage) -> TaskiqMessage:
+        # A consumed one-time schedule must not be reused for the next retry.
+        if "_retries" in message.labels:
+            message.labels.pop("schedule_id", None)
+        return await super().pre_execute(message)
+
+    async def post_execute(
+        self, message: TaskiqMessage, result: TaskiqResult[Any]
+    ) -> None:
+        await super().post_execute(message, result)
+        if isinstance(result.error, NoResultError):
+            _task_center_repository().reset_retried_task(message.task_id)
+
+
+class ResilientSmartRetryMiddleware(SmartRetryMiddleware):
+    """Bound retry scheduling and fail closed if Redis cannot accept it."""
+
+    async def on_error(
+        self,
+        message: TaskiqMessage,
+        result: TaskiqResult[Any],
+        exception: BaseException,
+    ) -> None:
+        if isinstance(exception, PermanentMediaDownloadError):
+            return
+        try:
+            async with asyncio.timeout(_RETRY_SCHEDULE_TIMEOUT_SECONDS):
+                await super().on_error(message, result, exception)
+        except Exception as retry_error:
+            logger.exception(
+                "Could not schedule retry for task %s; finishing the attempt as failed",
+                message.task_id,
+            )
+            result.error = RuntimeError(
+                f"{exception}; retry scheduling failed: "
+                f"{retry_error.__class__.__name__}: {str(retry_error) or 'unknown error'}"
+            )
+            await _release_failed_retry_lock(message)
 
 
 def dashboard_api_token(app_settings: Settings = settings) -> str:
@@ -65,11 +117,12 @@ def dashboard_api_token(app_settings: Settings = settings) -> str:
 result_backend = RedisAsyncResultBackend(
     redis_url=settings.task_redis_url,
     result_ex_time=settings.task_result_ttl_seconds,
-    health_check_interval=30,
+    **_REDIS_CONNECTION_KWARGS,
 )
 retry_schedule_source = ListRedisScheduleSource(
     settings.task_redis_url,
     prefix="archivex:retry-schedules",
+    **_REDIS_CONNECTION_KWARGS,
 )
 
 _worker_timeout = (
@@ -84,9 +137,9 @@ broker = RedisStreamBroker(
     idle_timeout=(_worker_timeout + 60) * 1000,
     unacknowledged_lock_timeout=30,
     maxlen=100_000,
-    health_check_interval=30,
+    **_REDIS_CONNECTION_KWARGS,
 ).with_result_backend(result_backend).with_middlewares(
-    SmartRetryMiddleware(
+    ResilientSmartRetryMiddleware(
         default_retry_count=settings.task_retry_count,
         default_delay=settings.task_retry_delay_seconds,
         use_jitter=True,
@@ -120,7 +173,11 @@ def _task_center_repository() -> TaskCenterRepository:
 
 
 def _redis() -> Redis:
-    return Redis.from_url(settings.task_redis_url, decode_responses=True)
+    return Redis.from_url(
+        settings.task_redis_url,
+        decode_responses=True,
+        **_REDIS_CONNECTION_KWARGS,
+    )
 
 
 def _sync_lock_key(x_user_id: str) -> str:
@@ -173,6 +230,25 @@ async def _release_lock(key: str, task_id: str) -> None:
         await client.eval(_DELETE_OWNED_LOCK, 1, key, task_id)
     finally:
         await client.aclose()
+
+
+async def _release_failed_retry_lock(message: TaskiqMessage) -> None:
+    if not message.args:
+        return
+    target_id = str(message.args[0])
+    if message.task_name == "archivex.sync_account":
+        lock_key = _sync_lock_key(target_id)
+    elif message.task_name == "archivex.download_media":
+        lock_key = _media_lock_key(target_id)
+    else:
+        return
+    try:
+        await _release_lock(lock_key, message.task_id)
+    except Exception:
+        logger.exception(
+            "Could not release dedupe lock after retry scheduling failed for task %s",
+            message.task_id,
+        )
 
 
 async def _rollback_failed_publish(key: str, task_id: str, exc: BaseException) -> None:

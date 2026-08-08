@@ -748,7 +748,7 @@ class ArchiveRepository:
                 """SELECT media.id FROM media
                 JOIN posts ON posts.tweet_id = media.tweet_id
                 WHERE posts.account_x_user_id = ?
-                    AND media.download_status IN ('pending', 'failed')
+                    AND media.download_status = 'pending'
                 ORDER BY media.created_at, media.id""",
                 (account_x_user_id,),
             ).fetchall()

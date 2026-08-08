@@ -82,6 +82,26 @@ def test_media_and_sync_runs_are_persisted(tmp_path) -> None:
     assert run[2] == 1
 
 
+def test_account_media_queue_only_returns_new_pending_media(tmp_path) -> None:
+    repository, _, _ = _repository(tmp_path)
+    account = repository.upsert_account("42", "example")
+    repository.upsert_post(PostInput(
+        "100", account.x_user_id, "original", "post", datetime(2026, 8, 5, tzinfo=UTC),
+        "https://x.com/example/status/100", {},
+    ))
+    pending_id = repository.upsert_media(
+        MediaInput("100", "image", "https://example.test/pending.jpg")
+    )
+    repository.upsert_media(MediaInput(
+        "100", "image", "https://example.test/failed.jpg", download_status="failed",
+    ))
+    repository.upsert_media(MediaInput(
+        "100", "image", "https://example.test/completed.jpg", download_status="completed",
+    ))
+
+    assert repository.media_ids_to_download(account.x_user_id) == [pending_id]
+
+
 def test_running_sync_runs_are_closed_after_process_interruption(tmp_path) -> None:
     repository, database_path, _ = _repository(tmp_path)
     account = repository.upsert_account("42", "example")

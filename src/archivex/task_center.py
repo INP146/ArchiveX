@@ -113,6 +113,24 @@ class TaskCenterRepository:
             return False
         return cursor.rowcount == 1
 
+    def reset_retried_task(self, task_id: str) -> bool:
+        """Clear lifecycle fields left by an earlier attempt of the same task ID."""
+        normalized_id = self._normalize_task_id(task_id)
+        if normalized_id is None or not self.database_path.is_file():
+            return False
+        try:
+            with sqlite3.connect(self.database_path, timeout=5) as connection:
+                cursor = connection.execute(
+                    """UPDATE tasks
+                    SET status = ?, started_at = NULL, finished_at = NULL,
+                        result = NULL, error = NULL
+                    WHERE id = ?""",
+                    (TASK_STATUS_VALUES["queued"], normalized_id),
+                )
+        except sqlite3.OperationalError:
+            return False
+        return cursor.rowcount == 1
+
     def delete_abandoned_tasks(self) -> int:
         """Delete terminal publish/interruption records from dashboard history."""
         if not self.database_path.is_file():
@@ -212,10 +230,11 @@ class TaskCenterRepository:
         finished_at = _utc_timestamp(row["finished_at"])
         duration_ms = None
         if started_at and finished_at:
-            duration_ms = round(
-                (datetime.fromisoformat(finished_at).timestamp()
-                 - datetime.fromisoformat(started_at).timestamp()) * 1000
+            elapsed = (
+                datetime.fromisoformat(finished_at).timestamp()
+                - datetime.fromisoformat(started_at).timestamp()
             )
+            duration_ms = round(elapsed * 1000) if elapsed >= 0 else None
         return {
             "id": str(uuid.UUID(hex=str(row["id"]))),
             "name": str(row["name"]),
@@ -243,6 +262,8 @@ def _json_value(value: str | None, fallback: Any) -> Any:
 
 
 def _automatic_retries_exhausted(task: dict[str, Any]) -> bool:
+    if str(task.get("error") or "").startswith("PermanentMediaDownloadError("):
+        return True
     labels = task.get("labels")
     if not isinstance(labels, dict) or "max_retries" not in labels:
         return True
