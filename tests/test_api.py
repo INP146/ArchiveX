@@ -217,6 +217,13 @@ def test_account_management_resolves_once_and_then_uses_x_user_id(tmp_path) -> N
         assert added.status_code == 201
         assert added.json()["x_user_id"] == x_user_id
         assert added.json()["archive_enabled"] is True
+        assert source.calls == [("resolve", "alice"), ("fetch", x_user_id)]
+
+        runs = client.get(
+            f"/api/sync-runs?account_x_user_id={x_user_id}", headers=headers
+        )
+        assert runs.status_code == 200
+        assert [run["status"] for run in runs.json()] == ["success"]
 
         paused = client.patch(
             f"/api/accounts/{x_user_id}",
@@ -237,4 +244,8 @@ def test_account_management_resolves_once_and_then_uses_x_user_id(tmp_path) -> N
         )
         assert [item["username"] for item in history.json()] == ["alice"]
 
-    assert source.calls == [("resolve", "alice"), ("fetch", x_user_id)]
+    assert source.calls == [
+        ("resolve", "alice"),
+        ("fetch", x_user_id),
+        ("fetch", x_user_id),
+    ]

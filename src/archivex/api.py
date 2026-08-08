@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
@@ -101,11 +101,13 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
         }
 
     @router.post("/accounts", status_code=status.HTTP_201_CREATED)
-    def add_account(payload: AddAccountRequest, response: Response) -> dict[str, Any]:
+    def add_account(payload: AddAccountRequest, response: Response,
+                    background_tasks: BackgroundTasks) -> dict[str, Any]:
         existing = repository.get_account(payload.x_user_id)
         account = repository.upsert_account(
             payload.x_user_id, payload.current_username, payload.display_name
         )
+        background_tasks.add_task(sync_service.sync_account, account.x_user_id)
         if existing is not None:
             response.status_code = status.HTTP_200_OK
         return repository.get_account_details(account.x_user_id) or account.__dict__

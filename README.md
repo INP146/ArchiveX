@@ -54,8 +54,9 @@ parameters. Post types are `original`, `reply`, `repost`, and `quote`.
 
 Account onboarding is a two-step operation. `POST /api/accounts/resolve` resolves
 a username or profile URL without persisting it. `POST /api/accounts` confirms
-the returned `x_user_id`. Account detail, pause/resume, manual sync, username
-history, post ownership, and archive paths all use the string `x_user_id`.
+the returned `x_user_id` and immediately starts its initial synchronization in
+the background. Account detail, pause/resume, manual sync, username history,
+post ownership, and archive paths all use the string `x_user_id`.
 
 ## Web frontend
 
