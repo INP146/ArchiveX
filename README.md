@@ -20,21 +20,29 @@ by `TASK_REDIS_URL` (the default is `redis://127.0.0.1:6379/0`). Only one
 scheduler process may run. Open `http://localhost:<WEB_PORT>/health` after the
 processes start.
 
-## Optional Compose deployment
+## Docker Compose deployment
 
 ```sh
 docker compose up --build
 ```
 
-The `./data` directory is mounted at `/data` in the container and holds the
-SQLite database, archive files, and future twscrape session data. Keep this
-directory when recreating the container.
+This starts the frontend, API, Redis, both workers, and the scheduler. No `.env`
+file is required: container paths, queue topology, Redis connectivity, and task
+settings are declared in `docker-compose.yml`. Open `http://localhost:8000`.
+
+The Compose file contains a development authentication-token default so the
+stack can start by itself. Set `ARCHIVEX_WEB_AUTH_TOKEN` in the shell before
+starting a public deployment. The `./data` directory is mounted at `/data` in
+the Python containers and holds the SQLite databases, archive files, and
+twscrape session data. Keep this directory when recreating containers.
 
 ## Configuration
 
-All settings are documented in `.env.example`. `WEB_AUTH_TOKEN`,
-`ARCHIVE_DB_PATH`, and `ARCHIVE_DATA_DIR` are required. Archive targets are
-added in the Web UI and stored by stable X user ID.
+`.env.example` is exclusively the host-development template and therefore uses
+`./data/...` paths plus host Redis/API addresses. Container configuration lives
+in `docker-compose.yml`; it does not use the host `.env` as a service env file.
+Optional deployment-only substitutions use the `ARCHIVEX_WEB_*` prefix.
+Archive targets are added in the Web UI and stored by stable X user ID.
 
 The application uses Taskiq and Redis for durable background work. A single
 scheduler enqueues enabled accounts at `ARCHIVE_SYNC_INTERVAL_SECONDS`, the
@@ -83,26 +91,29 @@ post ownership, and archive paths all use the string `x_user_id`.
 
 ## Task queue and dashboard
 
-The optional Compose deployment contains five runtime services:
+The Compose deployment contains six runtime services:
 
 ```text
 redis
+web            built React frontend and API reverse proxy
 archivex       FastAPI and the mounted task dashboard
 worker-crawl   one concurrent account synchronization
 worker-media   four concurrent media downloads
 scheduler      the single Taskiq scheduler
 ```
 
-After signing in to ArchiveX, use **任务中心** in the Web sidebar or open
+After signing in to ArchiveX, use **任务中心** in the Web sidebar. In Compose it
+is available at `http://localhost:8000/tasks`; local Vite development uses
 `http://localhost:5173/tasks`. The integrated page shows queued, running,
 completed, failed, and abandoned tasks, execution details, rerun actions, and
 configured schedules. `/ops/tasks` is reserved for internal Taskiq event
 reporting and redirects browser traffic back to the integrated page.
 
-Queue settings are documented in `.env.example`. Important operational limits
-include `TASK_SYNC_TIMEOUT_SECONDS`, `TASK_MEDIA_TIMEOUT_SECONDS`, retry count
-and delay settings, and `TASK_DEDUPE_TTL_SECONDS`. Redis is kept internal to the
-Compose network and persists its append-only log in the `redis_data` volume.
+Compose queue settings are declared in `docker-compose.yml`. Important
+operational limits include `TASK_SYNC_TIMEOUT_SECONDS`,
+`TASK_MEDIA_TIMEOUT_SECONDS`, retry count and delay settings, and
+`TASK_DEDUPE_TTL_SECONDS`. Redis is kept internal to the Compose network and
+persists its append-only log in the `redis_data` volume.
 
 The API no longer starts an in-process periodic synchronization loop.
 

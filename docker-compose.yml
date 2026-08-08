@@ -2,14 +2,40 @@ x-archivex-environment: &archivex-environment
   TWSCRAPE_SESSION_PATH: /data/twscrape
   ARCHIVE_DB_PATH: /data/archive.sqlite3
   ARCHIVE_DATA_DIR: /data/archive
+  ARCHIVE_INITIAL_POST_LIMIT: "-1"
+  ARCHIVE_INCREMENTAL_KNOWN_POST_LIMIT: "20"
+  ARCHIVE_SYNC_INTERVAL_SECONDS: "21600"
+  ARCHIVE_TIMEZONE: Asia/Shanghai
+  ARCHIVE_MEDIA_ENABLED: "true"
+  ARCHIVE_MEDIA_MAX_BYTES: "0"
+  TASK_QUEUE_ENABLED: "true"
   TASK_REDIS_URL: redis://redis:6379/0
+  TASK_CRAWL_QUEUE_NAME: archivex:crawl
+  TASK_MEDIA_QUEUE_NAME: archivex:media
+  TASK_WORKER_QUEUE_NAME: archivex:crawl
+  TASK_RESULT_TTL_SECONDS: "604800"
+  TASK_RETRY_COUNT: "5"
+  TASK_RETRY_DELAY_SECONDS: "30"
+  TASK_RETRY_MAX_DELAY_SECONDS: "900"
+  TASK_SYNC_TIMEOUT_SECONDS: "1800"
+  TASK_MEDIA_TIMEOUT_SECONDS: "300"
+  TASK_DEDUPE_TTL_SECONDS: "3600"
+  TASK_DASHBOARD_ENABLED: "true"
+  TASK_DASHBOARD_PATH: /ops/tasks
   TASK_DASHBOARD_URL: http://archivex:8000/ops/tasks
   TASK_DASHBOARD_DB_PATH: /data/taskiq-dashboard.sqlite3
+  WEB_HOST: 0.0.0.0
+  WEB_PORT: "8000"
+  WEB_AUTH_TOKEN: ${ARCHIVEX_WEB_AUTH_TOKEN:-change-me-before-production}
+  WEB_AUTH_DISPLAY_NAME: ${ARCHIVEX_WEB_AUTH_DISPLAY_NAME:-ArchiveX 管理员}
+  WEB_AUTH_USERNAME: ${ARCHIVEX_WEB_AUTH_USERNAME:-admin}
+  WEB_AUTH_AVATAR_URL: ${ARCHIVEX_WEB_AUTH_AVATAR_URL:-}
+  WEB_COOKIE_SECURE: "false"
+  LOG_LEVEL: INFO
 
 x-archivex-service: &archivex-service
   build: .
-  env_file:
-    - .env
+  image: archivex:local
   volumes:
     - ./data:/data
   environment: *archivex-environment
@@ -30,9 +56,6 @@ services:
 
   archivex:
     <<: *archivex-service
-    build: .
-    ports:
-      - "${WEB_PORT:-8000}:8000"
     depends_on:
       redis:
         condition: service_healthy
@@ -41,6 +64,21 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+  web:
+    build: ./frontend
+    image: archivex-web:local
+    ports:
+      - "8000:80"
+    depends_on:
+      archivex:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
 
   worker-crawl:
     <<: *archivex-service
@@ -58,8 +96,6 @@ services:
       - "30"
     environment:
       <<: *archivex-environment
-      TASK_REDIS_URL: redis://redis:6379/0
-      TASK_DASHBOARD_URL: http://archivex:8000/ops/tasks
       TASK_WORKER_QUEUE_NAME: archivex:crawl
     depends_on:
       archivex:
@@ -81,8 +117,6 @@ services:
       - "30"
     environment:
       <<: *archivex-environment
-      TASK_REDIS_URL: redis://redis:6379/0
-      TASK_DASHBOARD_URL: http://archivex:8000/ops/tasks
       TASK_WORKER_QUEUE_NAME: archivex:media
     depends_on:
       archivex:
@@ -93,8 +127,6 @@ services:
     command: ["taskiq", "scheduler", "archivex.tasks:scheduler"]
     environment:
       <<: *archivex-environment
-      TASK_REDIS_URL: redis://redis:6379/0
-      TASK_DASHBOARD_URL: http://archivex:8000/ops/tasks
       TASK_WORKER_QUEUE_NAME: archivex:crawl
     depends_on:
       archivex:

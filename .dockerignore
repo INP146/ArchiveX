@@ -1,0 +1,11 @@
+.git
+.env
+.venv
+.pytest_cache
+.agents
+backups
+data
+frontend
+**/__pycache__
+*.pyc
+.DS_Store
