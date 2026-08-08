@@ -1,7 +1,10 @@
 import asyncio
+import json
+import sqlite3
 import subprocess
 import sys
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -9,6 +12,7 @@ import pytest
 
 from archivex.media import GalleryDlMediaDownloader
 from archivex import tasks
+from archivex.task_center import TaskCenterRepository
 
 
 class FakeRedis:
@@ -56,6 +60,11 @@ class FakeTask:
             raise RuntimeError("redis unavailable")
 
 
+def test_redis_pools_check_idle_connections_before_reuse() -> None:
+    assert tasks.broker.connection_pool.connection_kwargs["health_check_interval"] == 30
+    assert tasks.result_backend.redis_pool.connection_kwargs["health_check_interval"] == 30
+
+
 def test_account_enqueue_coalesces_duplicate_tasks(monkeypatch) -> None:
     fake_redis = FakeRedis()
     fake_task = FakeTask()
@@ -77,13 +86,61 @@ def test_account_enqueue_coalesces_duplicate_tasks(monkeypatch) -> None:
 
 def test_enqueue_failure_releases_dedupe_lock(monkeypatch) -> None:
     fake_redis = FakeRedis()
+    fake_task = FakeTask(should_fail=True)
+    abandoned = []
+
+    class FakeTaskCenter:
+        def abandon_queued_task(self, task_id, error):
+            abandoned.append((task_id, error))
+            return True
+
     monkeypatch.setattr(tasks, "_redis", lambda: fake_redis)
-    monkeypatch.setattr(tasks, "sync_account_task", FakeTask(should_fail=True))
+    monkeypatch.setattr(tasks, "sync_account_task", fake_task)
+    monkeypatch.setattr(tasks, "_task_center_repository", FakeTaskCenter)
 
     with pytest.raises(RuntimeError, match="redis unavailable"):
         asyncio.run(tasks.enqueue_account_sync("42"))
 
     assert fake_redis.values == {}
+    assert abandoned == [(
+        fake_task.task_id,
+        "Task was not published to the broker: RuntimeError: redis unavailable",
+    )]
+
+
+def test_abandon_queued_task_finishes_dashboard_record(tmp_path) -> None:
+    database_path = tmp_path / "tasks.sqlite3"
+    task_id = uuid.uuid4()
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """CREATE TABLE tasks (
+                id CHAR(32) PRIMARY KEY, name TEXT NOT NULL, status INTEGER NOT NULL,
+                worker TEXT NOT NULL, args JSON NOT NULL, kwargs JSON NOT NULL,
+                labels JSON NOT NULL, result JSON, error TEXT, queued_at DATETIME,
+                started_at DATETIME, finished_at DATETIME
+            )"""
+        )
+        connection.execute(
+            """INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                task_id.hex, "archivex.sync_account", 3, "archivex:crawl",
+                json.dumps(["42", "manual"]), "{}", "{}", None, None,
+                "2026-08-08 12:00:00", None, None,
+            ),
+        )
+
+    repository = TaskCenterRepository(database_path, 3600, "archivex:crawl")
+
+    assert repository.abandon_queued_task(str(task_id), "publish failed") is True
+    task = repository.get_task(str(task_id))
+    assert task is not None
+    assert task["status"] == "abandoned"
+    assert task["error"] == "publish failed"
+    assert task["finished_at"] is not None
+    assert repository.abandon_queued_task(str(task_id), "again") is False
+    assert repository.delete_abandoned_tasks() == 1
+    assert repository.get_task(str(task_id)) is None
+    assert repository.delete_abandoned_tasks() == 0
 
 
 def test_gallery_dl_download_has_a_hard_timeout(tmp_path, monkeypatch) -> None:

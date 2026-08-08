@@ -14,12 +14,14 @@ import {
   FiPlay,
   FiRefreshCw,
   FiSearch,
-  FiServer
+  FiServer,
+  FiTrash2
 } from "react-icons/fi";
 
 import {
   TaskRecord,
   TaskStatus,
+  clearAbandonedTasks,
   getTask,
   getTaskSchedules,
   getTasks,
@@ -61,6 +63,17 @@ export function TaskListPage() {
       await queryClient.invalidateQueries({ queryKey: ["task-center"] });
     }
   });
+  const clearAbandoned = useMutation({
+    mutationFn: clearAbandonedTasks,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["task-center"] });
+    }
+  });
+
+  const selectStatus = (value: TaskStatus | null) => {
+    setStatus(value);
+    setPage(0);
+  };
 
   const filters: Array<{ value: TaskStatus | null; label: string }> = [
     { value: null, label: "全部" },
@@ -77,10 +90,10 @@ export function TaskListPage() {
       <TaskNavigation active="tasks" />
 
       <section className="x-task-metrics" aria-label="队列状态概览">
-        <Metric icon={<FiActivity />} label="运行中" value={tasks.data?.counts.in_progress} tone="running" />
-        <Metric icon={<FiInbox />} label="等待中" value={tasks.data?.counts.queued} tone="queued" />
-        <Metric icon={<FiCheckCircle />} label="已完成" value={tasks.data?.counts.completed} tone="completed" />
-        <Metric icon={<FiAlertCircle />} label="异常" value={(tasks.data?.counts.failure ?? 0) + (tasks.data?.counts.abandoned ?? 0)} tone="failure" />
+        <Metric icon={<FiActivity />} label="运行中" value={tasks.data?.counts.in_progress} tone="running" active={status === "in_progress"} onClick={() => selectStatus("in_progress")} />
+        <Metric icon={<FiInbox />} label="等待中" value={tasks.data?.counts.queued} tone="queued" active={status === "queued"} onClick={() => selectStatus("queued")} />
+        <Metric icon={<FiCheckCircle />} label="已完成" value={tasks.data?.counts.completed} tone="completed" active={status === "completed"} onClick={() => selectStatus("completed")} />
+        <Metric icon={<FiAlertCircle />} label="异常" value={tasks.data?.counts.failure} tone="failure" active={status === "failure"} onClick={() => selectStatus("failure")} />
       </section>
 
       <section className="x-task-controls">
@@ -99,7 +112,7 @@ export function TaskListPage() {
               key={filter.label}
               type="button"
               className={status === filter.value ? "is-active" : ""}
-              onClick={() => { setStatus(filter.value); setPage(0); }}
+              onClick={() => selectStatus(filter.value)}
             >
               {filter.label}
             </button>
@@ -130,6 +143,28 @@ export function TaskListPage() {
       )}
       {status === "failure" && retryFailures.error && (
         <div className="x-task-action-error">{retryFailures.error.message}</div>
+      )}
+      {status === "abandoned" && (
+        <section className="x-task-failure-action" aria-live="polite">
+          <div>
+            <strong>{tasks.data?.counts.abandoned ?? 0} 条已中断历史</strong>
+          </div>
+          <button
+            type="button"
+            className="x-task-command"
+            disabled={clearAbandoned.isPending || (tasks.data?.counts.abandoned ?? 0) === 0}
+            onClick={() => clearAbandoned.mutate()}
+          >
+            <FiTrash2 />
+            <span>{clearAbandoned.isPending ? "清除中" : "清除历史"}</span>
+          </button>
+        </section>
+      )}
+      {status === "abandoned" && clearAbandoned.data && (
+        <div className="x-task-action-success">已清除 {clearAbandoned.data.deleted} 条中断记录</div>
+      )}
+      {status === "abandoned" && clearAbandoned.error && (
+        <div className="x-task-action-error">{clearAbandoned.error.message}</div>
       )}
 
       <section className="x-task-list" aria-live="polite">
@@ -269,8 +304,8 @@ function TaskNavigation({ active }: { active: "tasks" | "schedules" }) {
   );
 }
 
-function Metric({ icon, label, value, tone }: { icon: ReactNode; label: string; value?: number; tone: string }) {
-  return <div className={`x-task-metric is-${tone}`}><span>{icon}</span><div><strong>{value ?? "-"}</strong><small>{label}</small></div></div>;
+function Metric({ icon, label, value, tone, active, onClick }: { icon: ReactNode; label: string; value?: number; tone: string; active: boolean; onClick: () => void }) {
+  return <button type="button" className={`x-task-metric is-${tone} ${active ? "is-active" : ""}`} onClick={onClick}><span>{icon}</span><div><strong>{value ?? "-"}</strong><small>{label}</small></div></button>;
 }
 
 function TaskRow({ task }: { task: TaskRecord }) {
@@ -330,7 +365,8 @@ function TaskState({ message, error = false }: { message: string; error?: boolea
 
 function taskLabel(name: string) { return TASK_NAMES[name] ?? name; }
 function canRerunTask(task: TaskRecord) {
-  return task.name === "archivex.sync_account" || task.name === "archivex.download_media";
+  const rerunnable = task.name === "archivex.sync_account" || task.name === "archivex.download_media";
+  return rerunnable && task.status !== "queued" && task.status !== "in_progress";
 }
 function shortId(id: string) { return id.split("-")[0]; }
 function queueLabel(queue: string) {

@@ -19,6 +19,7 @@ from archivex.media import GalleryDlMediaDownloader
 from archivex.source import TwscrapePostSource
 from archivex.storage import ArchiveRepository
 from archivex.sync import ArchiveSyncService
+from archivex.task_center import TaskCenterRepository
 from archivex.task_dispatcher import TaskSubmission
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ def dashboard_api_token(app_settings: Settings = settings) -> str:
 result_backend = RedisAsyncResultBackend(
     redis_url=settings.task_redis_url,
     result_ex_time=settings.task_result_ttl_seconds,
+    health_check_interval=30,
 )
 retry_schedule_source = ListRedisScheduleSource(
     settings.task_redis_url,
@@ -82,6 +84,7 @@ broker = RedisStreamBroker(
     idle_timeout=(_worker_timeout + 60) * 1000,
     unacknowledged_lock_timeout=30,
     maxlen=100_000,
+    health_check_interval=30,
 ).with_result_backend(result_backend).with_middlewares(
     SmartRetryMiddleware(
         default_retry_count=settings.task_retry_count,
@@ -106,6 +109,14 @@ scheduler = TaskiqScheduler(
 
 def _repository() -> ArchiveRepository:
     return ArchiveRepository(settings.archive_db_path, settings.archive_data_dir)
+
+
+def _task_center_repository() -> TaskCenterRepository:
+    return TaskCenterRepository(
+        settings.task_dashboard_db_path,
+        settings.archive_sync_interval_seconds,
+        settings.task_crawl_queue_name,
+    )
 
 
 def _redis() -> Redis:
@@ -164,6 +175,16 @@ async def _release_lock(key: str, task_id: str) -> None:
         await client.aclose()
 
 
+async def _rollback_failed_publish(key: str, task_id: str, exc: BaseException) -> None:
+    await _release_lock(key, task_id)
+    message = (
+        "Task was not published to the broker: "
+        f"{exc.__class__.__name__}: {str(exc) or 'unknown error'}"
+    )
+    if not _task_center_repository().abandon_queued_task(task_id, message):
+        logger.warning("No queued dashboard row to abandon for task %s", task_id)
+
+
 def _is_final_attempt(context: Context) -> bool:
     retries = int(context.message.labels.get("_retries", 0))
     max_retries = int(context.message.labels.get("max_retries", settings.task_retry_count))
@@ -182,8 +203,8 @@ async def enqueue_account_sync(x_user_id: str, trigger: str = "manual") -> TaskS
             .with_task_id(task_id)
             .kiq(x_user_id, trigger)
         )
-    except Exception:
-        await _release_lock(lock_key, task_id)
+    except Exception as exc:
+        await _rollback_failed_publish(lock_key, task_id, exc)
         raise
     return TaskSubmission(task_id, "queued", False)
 
@@ -200,8 +221,8 @@ async def enqueue_media_download(media_id: str) -> TaskSubmission:
             .with_task_id(task_id)
             .kiq(media_id)
         )
-    except Exception:
-        await _release_lock(lock_key, task_id)
+    except Exception as exc:
+        await _rollback_failed_publish(lock_key, task_id, exc)
         raise
     return TaskSubmission(task_id, "queued", False)
 

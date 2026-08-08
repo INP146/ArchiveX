@@ -43,8 +43,9 @@
 .x-task-nav a.is-active::after { position: absolute; right: calc(50% - 28px); bottom: 0; left: calc(50% - 28px); height: 4px; border-radius: 4px 4px 0 0; background: var(--x-accent); content: ""; }
 
 .x-task-metrics { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--x-border); }
-.x-task-metric { display: flex; min-width: 0; height: 88px; align-items: center; gap: 12px; padding: 0 18px; border-right: 1px solid var(--x-border); }
+.x-task-metric { display: flex; min-width: 0; height: 88px; align-items: center; gap: 12px; padding: 0 18px; border: 0; border-right: 1px solid var(--x-border); background: transparent; color: inherit; text-align: left; }
 .x-task-metric:last-child { border-right: 0; }
+.x-task-metric:hover, .x-task-metric.is-active { background: #080808; }
 .x-task-metric > span { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; border-radius: 50%; background: #16181c; }
 .x-task-metric svg { width: 18px; height: 18px; }
 .x-task-metric > div { display: flex; min-width: 0; flex-direction: column; }

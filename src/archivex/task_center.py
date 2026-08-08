@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -88,6 +88,44 @@ class TaskCenterRepository:
         except sqlite3.OperationalError:
             return None
         return self._task_response(row) if row else None
+
+    def abandon_queued_task(self, task_id: str, error: str) -> bool:
+        """Finish a dashboard row when its broker publish did not succeed."""
+        normalized_id = self._normalize_task_id(task_id)
+        if normalized_id is None or not self.database_path.is_file():
+            return False
+        finished_at = datetime.now(UTC).replace(tzinfo=None).isoformat()
+        try:
+            with sqlite3.connect(self.database_path, timeout=5) as connection:
+                cursor = connection.execute(
+                    """UPDATE tasks
+                    SET status = ?, error = ?, finished_at = ?
+                    WHERE id = ? AND status = ?""",
+                    (
+                        TASK_STATUS_VALUES["abandoned"],
+                        error,
+                        finished_at,
+                        normalized_id,
+                        TASK_STATUS_VALUES["queued"],
+                    ),
+                )
+        except sqlite3.OperationalError:
+            return False
+        return cursor.rowcount == 1
+
+    def delete_abandoned_tasks(self) -> int:
+        """Delete terminal publish/interruption records from dashboard history."""
+        if not self.database_path.is_file():
+            return 0
+        try:
+            with sqlite3.connect(self.database_path, timeout=5) as connection:
+                cursor = connection.execute(
+                    "DELETE FROM tasks WHERE status = ?",
+                    (TASK_STATUS_VALUES["abandoned"],),
+                )
+        except sqlite3.OperationalError:
+            return 0
+        return cursor.rowcount
 
     def list_latest_failures(self) -> list[dict[str, Any]]:
         """Return the latest failure and its current retry state for each target."""

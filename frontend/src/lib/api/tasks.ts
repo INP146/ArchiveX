@@ -78,6 +78,10 @@ export function retryFailedTasks() {
   return apiFetch<FailureRetryResult>("/api/task-center/failures/retry", { method: "POST" });
 }
 
+export function clearAbandonedTasks() {
+  return apiFetch<{ deleted: number }>("/api/task-center/tasks/abandoned", { method: "DELETE" });
+}
+
 export function getTaskSchedules() {
   return apiFetch<TaskSchedule[]>("/api/task-center/schedules");
 }

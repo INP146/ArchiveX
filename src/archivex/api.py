@@ -265,11 +265,20 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
             raise HTTPException(status_code=404, detail="task not found")
         return task
 
+    @router.delete("/task-center/tasks/abandoned")
+    def delete_abandoned_tasks() -> dict[str, int]:
+        return {"deleted": task_center.delete_abandoned_tasks()}
+
     @router.post("/task-center/tasks/{task_id}/rerun", status_code=status.HTTP_202_ACCEPTED)
     async def rerun_task(task_id: str) -> dict[str, Any]:
         task = task_center.get_task(task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
+        if task["status"] in {"queued", "in_progress"}:
+            raise HTTPException(
+                status_code=409,
+                detail="a queued or running task cannot be rerun",
+            )
         args = task["args"] if isinstance(task["args"], list) else []
         if task["name"] == "archivex.sync_account" and args:
             submission = await task_dispatcher.enqueue_account_sync(str(args[0]), "rerun")

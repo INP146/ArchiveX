@@ -427,6 +427,38 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
         assert rerun.status_code == 202
         assert rerun.json()["task_id"] == "task-123"
 
+        queued_task_id = uuid.uuid4()
+        with sqlite3.connect(settings.task_dashboard_db_path) as connection:
+            connection.execute(
+                """INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    queued_task_id.hex, "archivex.sync_account", 3, "archivex:crawl",
+                    json.dumps(["999", "manual"]), "{}", "{}", None, None,
+                    "2026-08-08 12:00:04", None, None,
+                ),
+            )
+        blocked_rerun = client.post(
+            f"/api/task-center/tasks/{queued_task_id}/rerun", headers=headers
+        )
+        assert blocked_rerun.status_code == 409
+
+        abandoned_task_id = uuid.uuid4()
+        with sqlite3.connect(settings.task_dashboard_db_path) as connection:
+            connection.execute(
+                """INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    abandoned_task_id.hex, "archivex.sync_account", 4, "archivex:crawl",
+                    json.dumps(["42", "manual"]), "{}", "{}", None, "publish failed",
+                    "2026-08-08 12:00:05", None, "2026-08-08 12:00:06",
+                ),
+            )
+        cleared = client.delete("/api/task-center/tasks/abandoned", headers=headers)
+        assert cleared.status_code == 200
+        assert cleared.json() == {"deleted": 1}
+        assert client.get(
+            f"/api/task-center/tasks/{abandoned_task_id}", headers=headers
+        ).status_code == 404
+
         schedules = client.get("/api/task-center/schedules", headers=headers)
         assert schedules.status_code == 200
         assert schedules.json()[0]["enabled_accounts"] == 1
