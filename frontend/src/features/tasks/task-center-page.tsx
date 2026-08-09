@@ -21,7 +21,8 @@ import {
 import {
   TaskRecord,
   TaskStatus,
-  clearAbandonedTasks,
+  TerminalTaskStatus,
+  clearTaskHistory,
   getTask,
   getTaskSchedules,
   getTasks,
@@ -64,16 +65,31 @@ export function TaskListPage() {
       await queryClient.invalidateQueries({ queryKey: ["task-center"] });
     }
   });
-  const clearAbandoned = useMutation({
-    mutationFn: clearAbandonedTasks,
+  const clearHistory = useMutation({
+    mutationFn: (historyStatus?: TerminalTaskStatus) => clearTaskHistory(historyStatus),
     onSuccess: async () => {
+      setPage(0);
       await queryClient.invalidateQueries({ queryKey: ["task-center"] });
     }
   });
 
   const selectStatus = (value: TaskStatus | null) => {
+    clearHistory.reset();
     setStatus(value);
     setPage(0);
+  };
+
+  const historyStatus = terminalTaskStatus(status);
+  const canClearHistory = status === null || historyStatus !== undefined;
+  const historyCount = status === null
+    ? terminalTaskCount(tasks.data?.counts)
+    : (tasks.data?.counts[status] ?? 0);
+  const historyLabel = status === null
+    ? "已结束记录"
+    : `${STATUS_META[status]?.label ?? "任务"}记录`;
+  const requestHistoryClear = () => {
+    if (!window.confirm(`确定清除全部${historyLabel}？此操作不可撤销。`)) return;
+    clearHistory.mutate(historyStatus);
   };
 
   const filters: Array<{ value: TaskStatus | null; label: string }> = [
@@ -128,15 +144,26 @@ export function TaskListPage() {
           <div>
             <strong>{tasks.data?.counts.failure ?? 0} 条失败记录</strong>
           </div>
-          <button
-            type="button"
-            className="x-task-command"
-            disabled={retryFailures.isPending || (tasks.data?.counts.failure ?? 0) === 0}
-            onClick={() => retryFailures.mutate()}
-          >
-            <FiRefreshCw className={retryFailures.isPending ? "is-spinning" : ""} />
-            <span>{retryFailures.isPending ? "提交中" : "一键重试"}</span>
-          </button>
+          <div className="x-task-action-buttons">
+            <button
+              type="button"
+              className="x-task-command is-danger"
+              disabled={clearHistory.isPending}
+              onClick={requestHistoryClear}
+            >
+              <FiTrash2 />
+              <span>{clearHistory.isPending ? "清除中" : "清除记录"}</span>
+            </button>
+            <button
+              type="button"
+              className="x-task-command"
+              disabled={retryFailures.isPending || (tasks.data?.counts.failure ?? 0) === 0}
+              onClick={() => retryFailures.mutate()}
+            >
+              <FiRefreshCw className={retryFailures.isPending ? "is-spinning" : ""} />
+              <span>{retryFailures.isPending ? "提交中" : "一键重试"}</span>
+            </button>
+          </div>
         </section>
       )}
       {status === "failure" && retryFailures.data && (
@@ -147,27 +174,27 @@ export function TaskListPage() {
       {status === "failure" && retryFailures.error && (
         <div className="x-task-action-error">{retryFailures.error.message}</div>
       )}
-      {status === "abandoned" && (
+      {canClearHistory && status !== "failure" && (
         <section className="x-task-failure-action" aria-live="polite">
           <div>
-            <strong>{tasks.data?.counts.abandoned ?? 0} 条已中断历史</strong>
+            <strong>{historyCount} 条{historyLabel}</strong>
           </div>
           <button
             type="button"
-            className="x-task-command"
-            disabled={clearAbandoned.isPending || (tasks.data?.counts.abandoned ?? 0) === 0}
-            onClick={() => clearAbandoned.mutate()}
+            className="x-task-command is-danger"
+            disabled={clearHistory.isPending || historyCount === 0}
+            onClick={requestHistoryClear}
           >
             <FiTrash2 />
-            <span>{clearAbandoned.isPending ? "清除中" : "清除历史"}</span>
+            <span>{clearHistory.isPending ? "清除中" : status === null ? "清除已结束" : "清除记录"}</span>
           </button>
         </section>
       )}
-      {status === "abandoned" && clearAbandoned.data && (
-        <div className="x-task-action-success">已清除 {clearAbandoned.data.deleted} 条中断记录</div>
+      {canClearHistory && clearHistory.data && (
+        <div className="x-task-action-success">已清除 {clearHistory.data.deleted} 条任务历史</div>
       )}
-      {status === "abandoned" && clearAbandoned.error && (
-        <div className="x-task-action-error">{clearAbandoned.error.message}</div>
+      {canClearHistory && clearHistory.error && (
+        <div className="x-task-action-error">{clearHistory.error.message}</div>
       )}
 
       <section className="x-task-list" aria-live="polite">
@@ -309,6 +336,17 @@ function TaskNavigation({ active }: { active: "tasks" | "schedules" }) {
 
 function Metric({ icon, label, value, tone, active, onClick }: { icon: ReactNode; label: string; value?: number; tone: string; active: boolean; onClick: () => void }) {
   return <button type="button" className={`x-task-metric is-${tone} ${active ? "is-active" : ""}`} onClick={onClick}><span>{icon}</span><div><strong>{value ?? "-"}</strong><small>{label}</small></div></button>;
+}
+
+function terminalTaskStatus(status: TaskStatus | null): TerminalTaskStatus | undefined {
+  return status === "completed" || status === "failure" || status === "abandoned"
+    ? status
+    : undefined;
+}
+
+function terminalTaskCount(counts: { all: number; in_progress: number; queued: number; retry_scheduled: number } | undefined) {
+  if (!counts) return 0;
+  return Math.max(0, counts.all - counts.in_progress - counts.queued - counts.retry_scheduled);
 }
 
 function TaskRow({ task }: { task: TaskRecord }) {

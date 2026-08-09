@@ -7,6 +7,7 @@ export type TaskStatus =
   | "queued"
   | "retry_scheduled"
   | "abandoned";
+export type TerminalTaskStatus = Extract<TaskStatus, "completed" | "failure" | "abandoned">;
 
 export interface TaskAttempt {
   attempt: number;
@@ -103,8 +104,11 @@ export function retryFailedTasks() {
   return apiFetch<FailureRetryResult>("/api/task-center/failures/retry", { method: "POST" });
 }
 
-export function clearAbandonedTasks() {
-  return apiFetch<{ deleted: number }>("/api/task-center/tasks/abandoned", { method: "DELETE" });
+export function clearTaskHistory(status?: TerminalTaskStatus) {
+  const parameters = status ? `?status=${status}` : "";
+  return apiFetch<{ deleted: number }>(`/api/task-center/tasks/history${parameters}`, {
+    method: "DELETE"
+  });
 }
 
 export function getTaskSchedules() {

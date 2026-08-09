@@ -18,6 +18,7 @@ TASK_STATUSES = (
     "abandoned",
 )
 TASK_STATUS_VALUES = {status: status for status in TASK_STATUSES}
+TERMINAL_TASK_STATUSES = ("completed", "failure", "abandoned")
 TASK_SCHEMA = """
 CREATE TABLE IF NOT EXISTS queue_tasks (
     id TEXT PRIMARY KEY,
@@ -512,11 +513,21 @@ class TaskCenterRepository:
             )
         return cursor.rowcount == 1
 
-    def delete_abandoned_tasks(self) -> int:
+    def delete_task_history(self, status: str | None = None) -> int:
+        if status is not None and status not in TERMINAL_TASK_STATUSES:
+            raise ValueError(f"cannot delete active task status: {status}")
         with self._write() as connection:
-            cursor = connection.execute(
-                "DELETE FROM queue_tasks WHERE status = 'abandoned'"
-            )
+            if status is None:
+                placeholders = ", ".join("?" for _ in TERMINAL_TASK_STATUSES)
+                cursor = connection.execute(
+                    f"DELETE FROM queue_tasks WHERE status IN ({placeholders})",
+                    TERMINAL_TASK_STATUSES,
+                )
+            else:
+                cursor = connection.execute(
+                    "DELETE FROM queue_tasks WHERE status = ?",
+                    (status,),
+                )
         return cursor.rowcount
 
     def list_latest_failures(self) -> list[dict[str, Any]]:

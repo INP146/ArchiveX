@@ -457,7 +457,15 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
             {},
             "publish failed",
         )
-        cleared = client.delete("/api/task-center/tasks/abandoned", headers=headers)
+        invalid_clear = client.delete(
+            "/api/task-center/tasks/history?status=queued",
+            headers=headers,
+        )
+        assert invalid_clear.status_code == 422
+        cleared = client.delete(
+            "/api/task-center/tasks/history?status=abandoned",
+            headers=headers,
+        )
         assert cleared.status_code == 200
         assert cleared.json() == {"deleted": 1}
         assert client.get(

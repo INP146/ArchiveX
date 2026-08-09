@@ -258,16 +258,21 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
         response["counts"]["failure"] = len(current_failures)
         return response
 
+    @router.delete("/task-center/tasks/history")
+    def delete_task_history(
+        task_status: Literal["completed", "failure", "abandoned"] | None = Query(
+            default=None,
+            alias="status",
+        ),
+    ) -> dict[str, int]:
+        return {"deleted": task_center.delete_task_history(task_status)}
+
     @router.get("/task-center/tasks/{task_id}")
     def get_task(task_id: str) -> dict[str, Any]:
         task = task_center.get_task(task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
         return task
-
-    @router.delete("/task-center/tasks/abandoned")
-    def delete_abandoned_tasks() -> dict[str, int]:
-        return {"deleted": task_center.delete_abandoned_tasks()}
 
     @router.post("/task-center/tasks/{task_id}/rerun", status_code=status.HTTP_202_ACCEPTED)
     async def rerun_task(task_id: str) -> dict[str, Any]:

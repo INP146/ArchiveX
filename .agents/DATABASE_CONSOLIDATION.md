@@ -43,3 +43,9 @@ backups/pre-database-consolidation-20260809T112618Z.tar.gz
 ## 后续任务关联
 
 统一数据库为任务补充结构化目标字段和外键提供基础。后续可在 `queue_tasks` 增加 `account_x_user_id`、`media_id` 等可空字段，分别关联 `accounts` 和 `media`；不再需要解析 `args` 或做跨数据库查询来展示“同步谁”和“下载哪个媒体”。
+
+## 任务历史清理
+
+任务中心通过 `DELETE /api/task-center/tasks/history` 清理所有终态历史，也可以用 `status=completed|failure|abandoned` 只清一种状态。删除 `queue_tasks` 时由外键级联删除对应的 `queue_attempts`。
+
+`queued`、`in_progress` 和 `retry_scheduled` 不属于可清理状态，API 参数校验和仓储层都会拒绝删除。该入口不清理 Redis Stream、pending 消息、延迟重试或去重锁。

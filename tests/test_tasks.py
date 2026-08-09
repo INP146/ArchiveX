@@ -375,9 +375,49 @@ def test_abandon_queued_task_finishes_lifecycle_record(tmp_path) -> None:
     assert task["error"] == "publish failed"
     assert task["finished_at"] is not None
     assert repository.abandon_queued_task(str(task_id), "again") is False
-    assert repository.delete_abandoned_tasks() == 1
+    assert repository.delete_task_history("abandoned") == 1
     assert repository.get_task(str(task_id)) is None
-    assert repository.delete_abandoned_tasks() == 0
+    assert repository.delete_task_history("abandoned") == 0
+
+
+def test_delete_task_history_removes_only_terminal_tasks_and_attempts(tmp_path) -> None:
+    database_path = tmp_path / "tasks.sqlite3"
+    repository = TaskCenterRepository(database_path, 3600, "archivex:crawl")
+    task_ids = {
+        status: str(uuid.uuid4())
+        for status in ("completed", "failure", "abandoned", "queued")
+    }
+    for task_id in task_ids.values():
+        repository.record_queued(
+            task_id,
+            "archivex.sync_account",
+            "archivex:crawl",
+            ["42", "manual"],
+            {},
+            {},
+        )
+    repository.record_finished(
+        task_ids["completed"], {}, result={"ok": True}, error=None
+    )
+    repository.record_finished(
+        task_ids["failure"], {}, result=None, error="failed"
+    )
+    repository.abandon_queued_task(task_ids["abandoned"], "publish failed")
+
+    with pytest.raises(ValueError, match="cannot delete active task status"):
+        repository.delete_task_history("queued")
+    assert repository.delete_task_history("completed") == 1
+    assert repository.get_task(task_ids["completed"]) is None
+    assert repository.get_task(task_ids["failure"]) is not None
+    assert repository.get_task(task_ids["queued"]) is not None
+
+    assert repository.delete_task_history() == 2
+    assert repository.get_task(task_ids["failure"]) is None
+    assert repository.get_task(task_ids["abandoned"]) is None
+    assert repository.get_task(task_ids["queued"]) is not None
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM queue_tasks").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM queue_attempts").fetchone()[0] == 1
 
 
 def test_retry_attempts_preserve_failure_history_and_reject_late_events(tmp_path) -> None:
