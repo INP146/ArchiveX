@@ -1,5 +1,4 @@
 import asyncio
-import json
 import sqlite3
 import subprocess
 import sys
@@ -379,45 +378,6 @@ def test_abandon_queued_task_finishes_lifecycle_record(tmp_path) -> None:
     assert repository.delete_abandoned_tasks() == 1
     assert repository.get_task(str(task_id)) is None
     assert repository.delete_abandoned_tasks() == 0
-
-
-def test_legacy_active_rows_are_not_imported_as_live_tasks(tmp_path) -> None:
-    database_path = tmp_path / "tasks.sqlite3"
-    task_id = uuid.uuid4()
-    with sqlite3.connect(database_path) as connection:
-        connection.execute(
-            """CREATE TABLE tasks (
-                id CHAR(32) PRIMARY KEY, name TEXT NOT NULL, status INTEGER NOT NULL,
-                worker TEXT NOT NULL, args JSON NOT NULL, kwargs JSON NOT NULL,
-                labels JSON NOT NULL, result JSON, error TEXT, queued_at DATETIME,
-                started_at DATETIME, finished_at DATETIME
-            )"""
-        )
-        connection.execute(
-            """INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                task_id.hex, "archivex.download_media", 3, "archivex:media",
-                json.dumps(["media-id"]), "{}", "{}", None, None,
-                "2026-08-08 12:00:00", None, None,
-            ),
-        )
-
-    repository = TaskCenterRepository(database_path, 3600, "archivex:crawl")
-
-    migrated = repository.get_task(str(task_id))
-    assert migrated["status"] == "abandoned"
-    assert "not confirmed" in migrated["error"]
-
-    repository.record_started(
-        str(task_id),
-        "archivex.download_media",
-        "archivex:media",
-        ["media-id"],
-        {},
-        {},
-        "2026-08-08T12:01:00Z",
-    )
-    assert repository.get_task(str(task_id))["status"] == "in_progress"
 
 
 def test_retry_attempts_preserve_failure_history_and_reject_late_events(tmp_path) -> None:

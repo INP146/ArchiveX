@@ -5,6 +5,12 @@ foundation provides configuration validation, persistent local storage setup,
 a health endpoint, post synchronization, and local media downloads. It uses
 `twscrape` to discover posts and `gallery-dl` to download accessible media.
 
+Archive records and task lifecycle records share `ARCHIVE_DB_PATH`. The
+`queue_tasks` and `queue_attempts` tables therefore live beside accounts,
+posts, media, and synchronization runs in the same SQLite database. The
+twscrape `accounts.db` remains separate because its authentication and request
+state is owned by twscrape.
+
 ## Local development
 
 ```sh
@@ -110,7 +116,7 @@ is available at `http://localhost:8000/tasks`; local Vite development uses
 execution attempt, including queued, running, waiting-to-retry, completed,
 failed, and abandoned states. Manual retries create a new task linked to their
 source; automatic retries remain attempts of the original task. Task lifecycle
-events are written directly to the local lifecycle database and do not depend
+events are written directly to the unified archive database and do not depend
 on the API process being available.
 
 Compose queue settings are declared in `docker-compose.yml`. Important

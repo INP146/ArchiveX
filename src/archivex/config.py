@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Self
 
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -35,14 +35,6 @@ class Settings(BaseSettings):
     task_sync_timeout_seconds: int = Field(default=1800, ge=60)
     task_media_timeout_seconds: int = Field(default=300, ge=1)
     task_dedupe_ttl_seconds: int = Field(default=3600, ge=60)
-    task_lifecycle_db_path: Path = Field(
-        default=Path("/data/taskiq-dashboard.sqlite3"),
-        validation_alias=AliasChoices(
-            "task_lifecycle_db_path",
-            "TASK_LIFECYCLE_DB_PATH",
-            "TASK_DASHBOARD_DB_PATH",
-        ),
-    )
     web_host: str = "0.0.0.0"
     web_port: int = Field(default=8000, ge=1, le=65535)
     web_auth_token: str = Field(min_length=1)

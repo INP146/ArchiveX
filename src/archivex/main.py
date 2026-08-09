@@ -54,7 +54,7 @@ def create_app(settings: Settings | None = None, post_source: PostSource | None 
         else InlineSyncTaskDispatcher(service)
     )
     task_center = TaskCenterRepository(
-        app_settings.task_lifecycle_db_path,
+        app_settings.archive_db_path,
         app_settings.archive_sync_interval_seconds,
         app_settings.task_crawl_queue_name,
     )

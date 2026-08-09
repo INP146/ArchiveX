@@ -12,6 +12,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+from archivex.task_center import TASK_SCHEMA
+
 SCHEMA_VERSION = 2
 
 SCHEMA = """
@@ -183,16 +185,15 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
     }
     if "accounts" not in tables:
         connection.executescript(SCHEMA)
-        return
-
-    account_columns = {
-        row["name"] for row in connection.execute("PRAGMA table_info(accounts)")
-    }
-    if "id" in account_columns:
-        _migrate_legacy_schema(connection)
-        return
-
-    connection.executescript(SCHEMA)
+    else:
+        account_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(accounts)")
+        }
+        if "id" in account_columns:
+            _migrate_legacy_schema(connection)
+        else:
+            connection.executescript(SCHEMA)
+    connection.executescript(TASK_SCHEMA)
 
 
 def _migrate_legacy_schema(connection: sqlite3.Connection) -> None:

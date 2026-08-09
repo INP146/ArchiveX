@@ -139,12 +139,6 @@ class SystemReadinessProbe:
                 "issues": issues,
             }
 
-        checks["task_lifecycle_database"] = await self._database_check(
-            self.settings.task_lifecycle_db_path,
-            "task lifecycle database",
-            issues,
-        )
-
         client = None
         try:
             client = self._redis_factory()

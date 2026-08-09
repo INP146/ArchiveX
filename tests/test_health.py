@@ -1,3 +1,5 @@
+import sqlite3
+
 from fastapi.testclient import TestClient
 
 from archivex.config import Settings
@@ -11,7 +13,6 @@ def test_health_initializes_persistent_storage(tmp_path) -> None:
         archive_db_path=tmp_path / "archive.sqlite3",
         archive_data_dir=tmp_path / "archive",
         twscrape_session_path=tmp_path / "sessions",
-        task_lifecycle_db_path=tmp_path / "tasks.sqlite3",
         web_auth_token="test-token",
         task_queue_enabled=False,
     )
@@ -28,6 +29,14 @@ def test_health_initializes_persistent_storage(tmp_path) -> None:
     assert settings.archive_db_path.exists()
     assert settings.archive_data_dir.is_dir()
     assert settings.twscrape_session_path.is_dir()
+    with sqlite3.connect(settings.archive_db_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+    assert {"accounts", "posts", "media", "queue_tasks", "queue_attempts"} <= tables
 
 
 def test_api_startup_does_not_change_worker_owned_sync_runs(tmp_path) -> None:
@@ -36,7 +45,6 @@ def test_api_startup_does_not_change_worker_owned_sync_runs(tmp_path) -> None:
         archive_db_path=tmp_path / "archive.sqlite3",
         archive_data_dir=tmp_path / "archive",
         twscrape_session_path=tmp_path / "sessions",
-        task_lifecycle_db_path=tmp_path / "tasks.sqlite3",
         web_auth_token="test-token",
         task_queue_enabled=False,
     )
@@ -61,7 +69,6 @@ def test_api_liveness_starts_without_redis(tmp_path) -> None:
         archive_db_path=tmp_path / "archive.sqlite3",
         archive_data_dir=tmp_path / "archive",
         twscrape_session_path=tmp_path / "sessions",
-        task_lifecycle_db_path=tmp_path / "tasks.sqlite3",
         task_redis_url="redis://127.0.0.1:1/0",
         web_auth_token="test-token",
         task_queue_enabled=True,
@@ -72,4 +79,4 @@ def test_api_liveness_starts_without_redis(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
-    assert settings.task_lifecycle_db_path.is_file()
+    assert settings.archive_db_path.is_file()

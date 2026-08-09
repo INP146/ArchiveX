@@ -18,15 +18,7 @@ TASK_STATUSES = (
     "abandoned",
 )
 TASK_STATUS_VALUES = {status: status for status in TASK_STATUSES}
-_LEGACY_STATUS_NAMES = {
-    0: "in_progress",
-    1: "completed",
-    2: "failure",
-    3: "queued",
-    4: "abandoned",
-}
-
-_SCHEMA = """
+TASK_SCHEMA = """
 CREATE TABLE IF NOT EXISTS queue_tasks (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -588,74 +580,7 @@ class TaskCenterRepository:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA foreign_keys=ON")
-            connection.executescript(_SCHEMA)
-            self._migrate_legacy_tasks(connection)
-
-    def _migrate_legacy_tasks(self, connection: sqlite3.Connection) -> None:
-        legacy = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'"
-        ).fetchone()
-        if legacy is None:
-            return
-        for row in connection.execute("SELECT * FROM tasks").fetchall():
-            task_id = str(row["id"])
-            labels = _json_value(row["labels"], {})
-            attempt = _attempt_number(labels)
-            status = _LEGACY_STATUS_NAMES.get(int(row["status"]), "abandoned")
-            queued_at = _normalize_db_timestamp(row["queued_at"])
-            started_at = _normalize_db_timestamp(row["started_at"])
-            finished_at = _normalize_db_timestamp(row["finished_at"])
-            created_at = queued_at or started_at or finished_at or _now()
-            updated_at = finished_at or started_at or queued_at or created_at
-            error = row["error"]
-            if status in {"queued", "in_progress"}:
-                status = "abandoned"
-                error = error or "legacy active state was not confirmed during lifecycle migration"
-                finished_at = finished_at or _now()
-                updated_at = finished_at
-            connection.execute(
-                """INSERT OR IGNORE INTO queue_tasks (
-                    id, name, status, worker, args, kwargs, labels, result, error,
-                    queued_at, started_at, finished_at, current_attempt, max_attempts,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    task_id,
-                    str(row["name"]),
-                    status,
-                    str(row["worker"] or ""),
-                    row["args"] or "[]",
-                    row["kwargs"] or "{}",
-                    row["labels"] or "{}",
-                    row["result"],
-                    error,
-                    queued_at,
-                    started_at,
-                    finished_at,
-                    attempt,
-                    _max_attempts(labels),
-                    created_at,
-                    updated_at,
-                ),
-            )
-            connection.execute(
-                """INSERT OR IGNORE INTO queue_attempts (
-                    task_id, attempt, status, labels, result, error,
-                    queued_at, started_at, finished_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    task_id,
-                    attempt,
-                    status,
-                    row["labels"] or "{}",
-                    row["result"],
-                    error,
-                    queued_at,
-                    started_at,
-                    finished_at,
-                    updated_at,
-                ),
-            )
+            connection.executescript(TASK_SCHEMA)
 
     def _ensure_task(
         self,

@@ -277,7 +277,7 @@ def _repository() -> ArchiveRepository:
 @lru_cache(maxsize=1)
 def _task_center_repository() -> TaskCenterRepository:
     return TaskCenterRepository(
-        settings.task_lifecycle_db_path,
+        settings.archive_db_path,
         settings.archive_sync_interval_seconds,
         settings.task_crawl_queue_name,
     )

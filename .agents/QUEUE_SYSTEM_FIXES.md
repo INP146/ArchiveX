@@ -31,15 +31,15 @@ producer / scheduler ---> Redis Stream ---> crawl/media worker
          +-- publish failure -------------------+-- TaskLifecycleMiddleware
                                                     |
                                                     v
-                         task lifecycle SQLite: queue_tasks + queue_attempts
+                         archive SQLite: archive tables + queue_tasks + queue_attempts
 
 automatic retry: same logical task ID, attempt + 1, persisted retry_scheduled
 manual retry:    new logical task ID, linked to the source task with retry_of
-readiness:       SQLite + Redis + worker/scheduler heartbeat + Stream pending/lag
+readiness:       archive SQLite + Redis + worker/scheduler heartbeat + Stream pending/lag
                  + overdue retry schedule buckets
 ```
 
-任务执行不依赖 FastAPI 或任务中心页面在线。任务中心只是读取应用自有生命周期库；Redis Stream、retry schedule、去重锁和 heartbeat 由 readiness 联合观测。
+任务执行不依赖 FastAPI 或任务中心页面在线。任务中心直接读取统一的归档数据库；Redis Stream、retry schedule、去重锁和 heartbeat 由 readiness 联合观测。
 
 ## 3. 已实施修复
 
@@ -59,7 +59,7 @@ readiness:       SQLite + Redis + worker/scheduler heartbeat + Stream pending/la
 - 新增 `retry_scheduled` 和 `next_retry_at`，UI 显示当前 attempt、最大次数、每次错误和下次重试时间；等待自动重试期间禁止重复手动重试。
 - SmartRetry 使用 `dict(message.labels)` 构造下一次消息，避免 `_retries` 污染当前 attempt；只有确实安排成功的 retry 才隐藏 result backend 的当前失败结果。
 
-原 SQLite 文件名暂时保留为 `taskiq-dashboard.sqlite3`，仅用于无损迁移历史；配置名已改为 `TASK_LIFECYCLE_DB_PATH`，并兼容读取旧环境变量。
+2026-08-09 后续将任务生命周期表和历史数据一次性合并进 `ARCHIVE_DB_PATH`，删除独立任务库配置以及运行时迁移兼容层。迁移前快照压缩归档到 `backups/pre-database-consolidation-20260809T112618Z.tar.gz`，活动数据目录不再保留旧任务库。
 
 ### Q-03 publish 失败清理
 
@@ -88,7 +88,7 @@ Redis `XADD` 已提交但响应丢失时仍可能出现重复消息，这是分�
 ### Q-06 liveness、readiness 与 heartbeat
 
 - `/health` 保持 API liveness，不访问 Redis 或 Dashboard。
-- 新增 `/ready`，检查 Archive SQLite、任务生命周期 SQLite、Redis、crawl/media worker 与 scheduler heartbeat。
+- 新增 `/ready`，检查统一 Archive SQLite、Redis、crawl/media worker 与 scheduler heartbeat。
 - readiness 返回两个 Stream 的 consumer、lag、pending、最老 pending idle 时间和投递次数；超过任务 timeout 加 120 秒仍 pending 时报告 stalled。
 - readiness 同时统计独立 retry schedule，并在时间桶逾期仍有任务时报告 stalled，避免“Stream 为空但任务永远等待”的盲区。
 - worker 与 scheduler 每 10 秒写入 TTL 30 秒的 owner heartbeat，优雅退出只删除自己持有的 key。

@@ -1,5 +1,4 @@
 import asyncio
-import sqlite3
 from types import SimpleNamespace
 
 from archivex.config import Settings
@@ -86,7 +85,6 @@ def _settings(tmp_path, **overrides):
         "archive_db_path": tmp_path / "archive.sqlite3",
         "archive_data_dir": tmp_path / "archive",
         "twscrape_session_path": tmp_path / "sessions",
-        "task_lifecycle_db_path": tmp_path / "tasks.sqlite3",
         "web_auth_token": "test-token",
     }
     values.update(overrides)
@@ -96,8 +94,6 @@ def _settings(tmp_path, **overrides):
         settings.archive_data_dir,
         settings.twscrape_session_path,
     )
-    with sqlite3.connect(settings.task_lifecycle_db_path) as connection:
-        connection.execute("CREATE TABLE IF NOT EXISTS probe (id INTEGER)")
     return settings
 
 

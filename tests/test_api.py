@@ -1,7 +1,5 @@
 from datetime import UTC, datetime
 from collections.abc import AsyncIterator
-import json
-import sqlite3
 import uuid
 
 from fastapi.testclient import TestClient
@@ -78,7 +76,6 @@ def _settings(tmp_path) -> Settings:
         web_auth_username="test_admin",
         web_auth_avatar_url="https://example.test/admin.jpg",
         task_queue_enabled=False,
-        task_lifecycle_db_path=tmp_path / "taskiq-dashboard.sqlite3",
     )
 
 
@@ -369,33 +366,40 @@ def test_manual_sync_enqueues_without_waiting_for_the_source(tmp_path) -> None:
 
 def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
     settings = _settings(tmp_path)
-    task_id = uuid.uuid4()
-    with sqlite3.connect(settings.task_lifecycle_db_path) as connection:
-        connection.execute(
-            """CREATE TABLE tasks (
-                id CHAR(32) PRIMARY KEY, name TEXT NOT NULL, status INTEGER NOT NULL,
-                worker TEXT NOT NULL, args JSON NOT NULL, kwargs JSON NOT NULL,
-                labels JSON NOT NULL, result JSON, error TEXT, queued_at DATETIME,
-                started_at DATETIME, finished_at DATETIME
-            )"""
-        )
-        connection.execute(
-            """INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                task_id.hex,
-                "archivex.sync_account",
-                2,
-                "archivex:crawl",
-                json.dumps(["42", "manual"]),
-                "{}",
-                "{}",
-                None,
-                "network unavailable",
-                "2026-08-08 12:00:00",
-                "2026-08-08 12:00:01",
-                "2026-08-08 12:00:03",
-            ),
-        )
+    task_id = str(uuid.uuid4())
+    lifecycle = TaskCenterRepository(
+        settings.archive_db_path,
+        settings.archive_sync_interval_seconds,
+        settings.task_crawl_queue_name,
+    )
+    lifecycle.record_queued(
+        task_id,
+        "archivex.sync_account",
+        "archivex:crawl",
+        ["42", "manual"],
+        {},
+        {},
+        "2026-08-08T12:00:00Z",
+    )
+    lifecycle.record_started(
+        task_id,
+        "archivex.sync_account",
+        "archivex:crawl",
+        ["42", "manual"],
+        {},
+        {},
+        "2026-08-08T12:00:01Z",
+    )
+    lifecycle.record_finished(
+        task_id,
+        {},
+        result=None,
+        error="network unavailable",
+        finished_at="2026-08-08T12:00:03Z",
+        name="archivex.sync_account",
+        worker="archivex:crawl",
+        args=["42", "manual"],
+    )
 
     dispatcher = FakeTaskDispatcher()
     with TestClient(create_app(
@@ -405,18 +409,13 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
         dispatcher,
     )) as client:
         repository = ArchiveRepository(settings.archive_db_path, settings.archive_data_dir)
-        lifecycle = TaskCenterRepository(
-            settings.task_lifecycle_db_path,
-            settings.archive_sync_interval_seconds,
-            settings.task_crawl_queue_name,
-        )
         repository.upsert_account("42", "example")
         headers = {"Authorization": "Bearer test-token"}
 
         tasks = client.get("/api/task-center/tasks?status=failure", headers=headers)
         assert tasks.status_code == 200
         assert tasks.json()["total"] == 1
-        assert tasks.json()["items"][0]["id"] == str(task_id)
+        assert tasks.json()["items"][0]["id"] == task_id
         assert tasks.json()["items"][0]["duration_ms"] == 2000
 
         searched = client.get(f"/api/task-center/tasks?q={task_id}", headers=headers)

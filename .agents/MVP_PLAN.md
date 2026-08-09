@@ -133,6 +133,14 @@ media
 sync_runs
   id, account_id, started_at, finished_at,
   posts_seen, posts_new, media_new, status, error
+
+queue_tasks
+  id, name, status, worker, args, kwargs, labels,
+  current_attempt, max_attempts, retry_of, created_at, updated_at
+
+queue_attempts
+  task_id, attempt, status, labels, result, error,
+  queued_at, started_at, finished_at, next_retry_at, updated_at
 ```
 
 `tweet_id` 是帖子唯一键；重复抓取只更新 `updated_at`、原始 JSON 和可变的展示字段，不创建重复记录。
