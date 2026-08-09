@@ -11,6 +11,7 @@ from archivex.main import create_app
 from archivex.session import SessionAccountSummary
 from archivex.source import SourceAccount, SourcePost
 from archivex.storage import ArchiveRepository, MediaInput, PostInput
+from archivex.task_center import TaskCenterRepository
 from archivex.task_dispatcher import TaskSubmission
 
 
@@ -57,12 +58,12 @@ class FakeTaskDispatcher:
         self.calls = []
         self.media_calls = []
 
-    async def enqueue_account_sync(self, x_user_id, trigger="manual"):
-        self.calls.append((x_user_id, trigger))
+    async def enqueue_account_sync(self, x_user_id, trigger="manual", retry_of=None):
+        self.calls.append((x_user_id, trigger, retry_of))
         return TaskSubmission("task-123", "queued", False)
 
-    async def enqueue_media_download(self, media_id):
-        self.media_calls.append(media_id)
+    async def enqueue_media_download(self, media_id, retry_of=None):
+        self.media_calls.append((media_id, retry_of))
         return TaskSubmission("media-task-123", "queued", False)
 
 
@@ -77,7 +78,7 @@ def _settings(tmp_path) -> Settings:
         web_auth_username="test_admin",
         web_auth_avatar_url="https://example.test/admin.jpg",
         task_queue_enabled=False,
-        task_dashboard_db_path=tmp_path / "taskiq-dashboard.sqlite3",
+        task_lifecycle_db_path=tmp_path / "taskiq-dashboard.sqlite3",
     )
 
 
@@ -362,14 +363,14 @@ def test_manual_sync_enqueues_without_waiting_for_the_source(tmp_path) -> None:
         "state": "queued",
         "duplicate": False,
     }
-    assert dispatcher.calls == [("42", "manual")]
+    assert dispatcher.calls == [("42", "manual", None)]
     assert source.calls == []
 
 
 def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
     settings = _settings(tmp_path)
     task_id = uuid.uuid4()
-    with sqlite3.connect(settings.task_dashboard_db_path) as connection:
+    with sqlite3.connect(settings.task_lifecycle_db_path) as connection:
         connection.execute(
             """CREATE TABLE tasks (
                 id CHAR(32) PRIMARY KEY, name TEXT NOT NULL, status INTEGER NOT NULL,
@@ -404,6 +405,11 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
         dispatcher,
     )) as client:
         repository = ArchiveRepository(settings.archive_db_path, settings.archive_data_dir)
+        lifecycle = TaskCenterRepository(
+            settings.task_lifecycle_db_path,
+            settings.archive_sync_interval_seconds,
+            settings.task_crawl_queue_name,
+        )
         repository.upsert_account("42", "example")
         headers = {"Authorization": "Bearer test-token"}
 
@@ -428,30 +434,30 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
         assert rerun.json()["task_id"] == "task-123"
 
         queued_task_id = uuid.uuid4()
-        with sqlite3.connect(settings.task_dashboard_db_path) as connection:
-            connection.execute(
-                """INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    queued_task_id.hex, "archivex.sync_account", 3, "archivex:crawl",
-                    json.dumps(["999", "manual"]), "{}", "{}", None, None,
-                    "2026-08-08 12:00:04", None, None,
-                ),
-            )
+        lifecycle.record_queued(
+            str(queued_task_id),
+            "archivex.sync_account",
+            "archivex:crawl",
+            ["999", "manual"],
+            {},
+            {},
+            "2026-08-08T12:00:04Z",
+        )
         blocked_rerun = client.post(
             f"/api/task-center/tasks/{queued_task_id}/rerun", headers=headers
         )
         assert blocked_rerun.status_code == 409
 
         abandoned_task_id = uuid.uuid4()
-        with sqlite3.connect(settings.task_dashboard_db_path) as connection:
-            connection.execute(
-                """INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    abandoned_task_id.hex, "archivex.sync_account", 4, "archivex:crawl",
-                    json.dumps(["42", "manual"]), "{}", "{}", None, "publish failed",
-                    "2026-08-08 12:00:05", None, "2026-08-08 12:00:06",
-                ),
-            )
+        lifecycle.record_publish_failed(
+            str(abandoned_task_id),
+            "archivex.sync_account",
+            "archivex:crawl",
+            ["42", "manual"],
+            {},
+            {},
+            "publish failed",
+        )
         cleared = client.delete("/api/task-center/tasks/abandoned", headers=headers)
         assert cleared.status_code == 200
         assert cleared.json() == {"deleted": 1}
@@ -481,8 +487,7 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
             download_status="completed",
         ))
         repository.upsert_account("85", "retrying")
-        with sqlite3.connect(settings.task_dashboard_db_path) as connection:
-            for name, args, task_status, labels, started_at in [
+        for name, args, task_status, labels, started_at in [
                 ("archivex.sync_account", ["42", "older"], 2, {}, "2026-08-08 11:00:00"),
                 ("archivex.sync_account", ["84", "older"], 2, {}, "2026-08-08 12:10:00"),
                 ("archivex.sync_account", ["84", "manual"], 1, {}, "2026-08-08 12:11:00"),
@@ -495,25 +500,37 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
                 ("archivex.schedule_enabled_accounts", [], 2, {}, "2026-08-08 13:02:00"),
                 ("archivex.unknown_task", ["target"], 2, {}, "2026-08-08 13:03:00"),
             ]:
-                connection.execute(
-                    """INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        uuid.uuid4().hex, name, task_status, "archivex:crawl",
-                        json.dumps(args), "{}", json.dumps(labels), None,
-                        "failed" if task_status == 2 else None,
-                        started_at, started_at, started_at,
-                    ),
-                )
+            item_id = str(uuid.uuid4())
+            lifecycle.record_queued(
+                item_id, name, "archivex:crawl", args, {}, labels,
+                started_at.replace(" ", "T") + "Z",
+            )
+            lifecycle.record_started(
+                item_id, name, "archivex:crawl", args, {}, labels,
+                started_at.replace(" ", "T") + "Z",
+            )
+            lifecycle.record_finished(
+                item_id,
+                labels,
+                result=None,
+                error="failed" if task_status == 2 else None,
+                finished_at=started_at.replace(" ", "T") + "Z",
+                name=name,
+                worker="archivex:crawl",
+                args=args,
+                kwargs={},
+            )
 
         current_failures = client.get(
             "/api/task-center/tasks?status=failure", headers=headers
         )
         assert current_failures.status_code == 200
-        assert current_failures.json()["total"] == 4
-        assert current_failures.json()["counts"]["failure"] == 4
+        assert current_failures.json()["total"] == 5
+        assert current_failures.json()["counts"]["failure"] == 5
         assert sorted(task["name"] for task in current_failures.json()["items"]) == [
             "archivex.download_media",
             "archivex.schedule_enabled_accounts",
+            "archivex.sync_account",
             "archivex.sync_account",
             "archivex.unknown_task",
         ]
@@ -523,19 +540,23 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
         )
         assert retry_failures.status_code == 202
         assert retry_failures.json() == {
-            "queued": 4,
+            "queued": 5,
             "duplicates": 0,
             "skipped_resolved": 2,
-            "automatic_retrying": 1,
+            "automatic_retrying": 0,
             "unsupported": 1,
             "failed": 0,
         }
 
-    assert dispatcher.calls == [
-        ("42", "rerun"),
-        ("42", "schedule_manual"),
-        ("42", "schedule_manual"),
-        ("85", "schedule_manual"),
-        ("42", "failure_retry"),
+    assert dispatcher.calls[0] == ("42", "rerun", str(task_id))
+    assert dispatcher.calls[1:4] == [
+        ("42", "schedule_manual", None),
+        ("42", "schedule_manual", None),
+        ("85", "schedule_manual", None),
     ]
-    assert dispatcher.media_calls == [pending_media_id]
+    assert dispatcher.calls[4][0:2] == ("85", "failure_retry")
+    assert dispatcher.calls[4][2] is not None
+    assert dispatcher.calls[5][0:2] == ("42", "failure_retry")
+    assert dispatcher.calls[5][2] is not None
+    assert dispatcher.media_calls[0][0] == pending_media_id
+    assert dispatcher.media_calls[0][1] is not None

@@ -25,6 +25,12 @@ class ProcessSpec:
     env: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ExistingProcess:
+    pid: int
+    command: str
+
+
 def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
@@ -51,6 +57,34 @@ def validate_project(root: Path) -> tuple[Path, str]:
     if npm is None:
         raise RuntimeError("npm was not found. Install Node.js and run scripts/setup_venv.py.")
     return venv_bin, npm
+
+
+def find_existing_queue_processes(root: Path) -> list[ExistingProcess]:
+    if os.name != "posix":
+        return []
+    result = subprocess.run(
+        ["ps", "-axo", "pid=,command="],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    taskiq = str(root / ".venv" / "bin" / "taskiq")
+    markers = (
+        f"{taskiq} worker archivex.tasks:broker",
+        f"{taskiq} scheduler archivex.tasks:scheduler",
+    )
+    existing: list[ExistingProcess] = []
+    for line in result.stdout.splitlines():
+        fields = line.strip().split(maxsplit=1)
+        if len(fields) != 2 or not any(marker in fields[1] for marker in markers):
+            continue
+        try:
+            pid = int(fields[0])
+        except ValueError:
+            continue
+        if pid != os.getpid():
+            existing.append(ExistingProcess(pid, fields[1]))
+    return existing
 
 
 def build_process_specs(root: Path, venv_bin: Path, npm: str) -> tuple[ProcessSpec, ...]:
@@ -205,6 +239,20 @@ def main() -> int:
         venv_bin, npm = validate_project(root)
     except RuntimeError as exc:
         print(exc, file=sys.stderr)
+        return 1
+
+    try:
+        existing = find_existing_queue_processes(root)
+    except subprocess.SubprocessError as exc:
+        print(f"Could not inspect existing queue processes: {exc}", file=sys.stderr)
+        return 1
+    if existing:
+        details = "\n".join(f"  - PID {item.pid}: {item.command}" for item in existing)
+        print(
+            "ArchiveX queue processes are already running; refusing to start a duplicate stack:\n"
+            f"{details}\nStop the existing stack cleanly before starting another one.",
+            file=sys.stderr,
+        )
         return 1
 
     base_env = os.environ.copy()

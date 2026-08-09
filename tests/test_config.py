@@ -21,3 +21,29 @@ def test_web_auth_username_is_normalized() -> None:
     )
 
     assert settings.web_auth_username == "archive_admin"
+
+
+def test_dedupe_ttl_must_cover_task_timeout_retry_and_reclaim_margin() -> None:
+    with pytest.raises(ValidationError, match="task_dedupe_ttl_seconds must be at least 360"):
+        Settings(
+            _env_file=None,
+            archive_db_path="/tmp/archive.sqlite3",
+            archive_data_dir="/tmp/archive",
+            web_auth_token="test-token",
+            task_sync_timeout_seconds=60,
+            task_media_timeout_seconds=300,
+            task_retry_max_delay_seconds=30,
+            task_dedupe_ttl_seconds=359,
+        )
+
+    settings = Settings(
+        _env_file=None,
+        archive_db_path="/tmp/archive.sqlite3",
+        archive_data_dir="/tmp/archive",
+        web_auth_token="test-token",
+        task_sync_timeout_seconds=60,
+        task_media_timeout_seconds=300,
+        task_retry_max_delay_seconds=30,
+        task_dedupe_ttl_seconds=360,
+    )
+    assert settings.task_dedupe_ttl_seconds == 360

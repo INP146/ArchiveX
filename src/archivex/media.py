@@ -46,6 +46,7 @@ class GalleryDlMediaDownloader:
             try:
                 completed = subprocess.run(
                     command,
+                    stdin=subprocess.DEVNULL,
                     capture_output=True,
                     text=True,
                     check=False,

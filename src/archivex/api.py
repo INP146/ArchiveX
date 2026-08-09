@@ -274,17 +274,24 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
         task = task_center.get_task(task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="task not found")
-        if task["status"] in {"queued", "in_progress"}:
+        if task["status"] in {"queued", "in_progress", "retry_scheduled"}:
             raise HTTPException(
                 status_code=409,
-                detail="a queued or running task cannot be rerun",
+                detail="an active task cannot be rerun",
             )
         args = task["args"] if isinstance(task["args"], list) else []
         if task["name"] == "archivex.sync_account" and args:
-            submission = await task_dispatcher.enqueue_account_sync(str(args[0]), "rerun")
+            submission = await task_dispatcher.enqueue_account_sync(
+                str(args[0]),
+                "rerun",
+                task["id"],
+            )
             return submission.as_dict()
         if task["name"] == "archivex.download_media" and args:
-            submission = await task_dispatcher.enqueue_media_download(str(args[0]))
+            submission = await task_dispatcher.enqueue_media_download(
+                str(args[0]),
+                task["id"],
+            )
             return submission.as_dict()
         raise HTTPException(status_code=422, detail="this task type cannot be rerun")
 
@@ -302,8 +309,16 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
             "failed": 0,
         }
 
-        async def enqueue_account(x_user_id: str, trigger: str) -> None:
-            submission = await task_dispatcher.enqueue_account_sync(x_user_id, trigger)
+        async def enqueue_account(
+            x_user_id: str,
+            trigger: str,
+            retry_of: str | None = None,
+        ) -> None:
+            submission = await task_dispatcher.enqueue_account_sync(
+                x_user_id,
+                trigger,
+                retry_of,
+            )
             result["duplicates" if submission.duplicate else "queued"] += 1
 
         for task in task_center.list_latest_failures():
@@ -321,7 +336,11 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
                     if account is None or not account.archive_enabled:
                         result["skipped_resolved"] += 1
                         continue
-                    await enqueue_account(account.x_user_id, "failure_retry")
+                    await enqueue_account(
+                        account.x_user_id,
+                        "failure_retry",
+                        task["id"],
+                    )
                     continue
 
                 if task["name"] == "archivex.download_media" and args:
@@ -329,7 +348,10 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
                     if media is None or media.download_status not in {"pending", "failed"}:
                         result["skipped_resolved"] += 1
                         continue
-                    submission = await task_dispatcher.enqueue_media_download(media.id)
+                    submission = await task_dispatcher.enqueue_media_download(
+                        media.id,
+                        task["id"],
+                    )
                     result["duplicates" if submission.duplicate else "queued"] += 1
                     continue
 

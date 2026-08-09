@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Self
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +19,7 @@ class Settings(BaseSettings):
     archive_initial_post_limit: int = Field(default=-1, ge=-1)
     archive_incremental_known_post_limit: int = 20
     archive_sync_interval_seconds: int = Field(default=21600, ge=60)
+    archive_schedule_run_immediately_on_start: bool = False
     archive_timezone: str = "Asia/Shanghai"
     archive_media_enabled: bool = True
     archive_media_max_bytes: int = Field(default=0, ge=0)
@@ -33,10 +35,14 @@ class Settings(BaseSettings):
     task_sync_timeout_seconds: int = Field(default=1800, ge=60)
     task_media_timeout_seconds: int = Field(default=300, ge=1)
     task_dedupe_ttl_seconds: int = Field(default=3600, ge=60)
-    task_dashboard_enabled: bool = True
-    task_dashboard_path: str = "/ops/tasks"
-    task_dashboard_url: str = "http://127.0.0.1:8000/ops/tasks"
-    task_dashboard_db_path: Path = Path("/data/taskiq-dashboard.sqlite3")
+    task_lifecycle_db_path: Path = Field(
+        default=Path("/data/taskiq-dashboard.sqlite3"),
+        validation_alias=AliasChoices(
+            "task_lifecycle_db_path",
+            "TASK_LIFECYCLE_DB_PATH",
+            "TASK_DASHBOARD_DB_PATH",
+        ),
+    )
     web_host: str = "0.0.0.0"
     web_port: int = Field(default=8000, ge=1, le=65535)
     web_auth_token: str = Field(min_length=1)
@@ -67,13 +73,20 @@ class Settings(BaseSettings):
     def normalize_optional_url(cls, value: str | None) -> str | None:
         return value or None
 
-    @field_validator("task_dashboard_path")
-    @classmethod
-    def normalize_dashboard_path(cls, value: str) -> str:
-        path = "/" + value.strip().strip("/")
-        if path == "/":
-            raise ValueError("must not be the root path")
-        return path
+    @model_validator(mode="after")
+    def validate_dedupe_lock_lifetime(self) -> Self:
+        reclaim_margin_seconds = 60
+        minimum_ttl = max(
+            self.task_sync_timeout_seconds,
+            self.task_media_timeout_seconds,
+            self.task_retry_max_delay_seconds,
+        ) + reclaim_margin_seconds
+        if self.task_queue_enabled and self.task_dedupe_ttl_seconds < minimum_ttl:
+            raise ValueError(
+                "task_dedupe_ttl_seconds must be at least "
+                f"{minimum_ttl} seconds to cover task execution, retry delay, and reclaim margin"
+            )
+        return self
 
 
 @lru_cache

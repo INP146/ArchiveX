@@ -810,14 +810,21 @@ class ArchiveRepository:
             )
 
     def interrupt_running_sync_runs(
-        self, error: str = "process stopped before synchronization completed"
+        self,
+        error: str = "process stopped before synchronization completed",
+        *,
+        account_x_user_id: str | None = None,
     ) -> int:
         """Close sync runs left open by a previous process."""
+        account_filter = " AND account_x_user_id = ?" if account_x_user_id is not None else ""
+        parameters: tuple[str, ...] = (_timestamp(), error)
+        if account_x_user_id is not None:
+            parameters += (account_x_user_id,)
         with _connect(self.database_path) as connection:
             cursor = connection.execute(
-                """UPDATE sync_runs SET finished_at = ?, status = 'interrupted', error = ?
-                WHERE status = 'running' AND finished_at IS NULL""",
-                (_timestamp(), error),
+                f"""UPDATE sync_runs SET finished_at = ?, status = 'interrupted', error = ?
+                WHERE status = 'running' AND finished_at IS NULL{account_filter}""",
+                parameters,
             )
         return cursor.rowcount
 

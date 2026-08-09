@@ -1,6 +1,25 @@
 import { apiFetch } from "./client";
 
-export type TaskStatus = "in_progress" | "completed" | "failure" | "queued" | "abandoned";
+export type TaskStatus =
+  | "in_progress"
+  | "completed"
+  | "failure"
+  | "queued"
+  | "retry_scheduled"
+  | "abandoned";
+
+export interface TaskAttempt {
+  attempt: number;
+  status: TaskStatus;
+  labels: Record<string, unknown>;
+  result: unknown;
+  error: string | null;
+  queued_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  next_retry_at: string | null;
+  duration_ms: number | null;
+}
 
 export interface TaskRecord {
   id: string;
@@ -15,7 +34,12 @@ export interface TaskRecord {
   queued_at: string | null;
   started_at: string | null;
   finished_at: string | null;
+  next_retry_at: string | null;
+  current_attempt: number;
+  max_attempts: number;
+  retry_of: string | null;
   duration_ms: number | null;
+  attempts?: TaskAttempt[];
 }
 
 export interface TaskCounts {
@@ -24,6 +48,7 @@ export interface TaskCounts {
   completed: number;
   failure: number;
   queued: number;
+  retry_scheduled: number;
   abandoned: number;
 }
 

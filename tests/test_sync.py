@@ -230,6 +230,24 @@ def test_cancelled_sync_run_is_marked_interrupted(tmp_path) -> None:
     assert service.repository.get_account("1").last_sync_at is None
 
 
+def test_sync_executor_recovers_only_stale_runs_for_its_account(tmp_path) -> None:
+    first = SourceAccount("1", "first", "First")
+    second = SourceAccount("2", "second", "Second")
+    source = FakeSource({"first": first, "second": second}, {"1": []})
+    service = _service(tmp_path, source, initial_post_limit=-1)
+    first_run = service.repository.start_sync_run("1")
+    second_run = service.repository.start_sync_run("2")
+
+    result = asyncio.run(service.sync_account("1"))
+
+    assert result.status == "success"
+    runs = {run.id: run for run in service.repository.list_sync_runs()}
+    assert runs[first_run].status == "interrupted"
+    assert runs[first_run].finished_at is not None
+    assert runs[second_run].status == "running"
+    assert runs[second_run].finished_at is None
+
+
 def test_new_media_is_downloaded_and_completed_media_is_not_downloaded_again(tmp_path) -> None:
     account = SourceAccount("1", "first", "First")
     post = SourcePost("2", "1", "first", "original", "post", datetime(2026, 8, 5, tzinfo=UTC),

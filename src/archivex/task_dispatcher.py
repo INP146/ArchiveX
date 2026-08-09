@@ -19,10 +19,17 @@ class TaskSubmission:
 
 class SyncTaskDispatcher(Protocol):
     async def enqueue_account_sync(
-        self, x_user_id: str, trigger: str = "manual"
+        self,
+        x_user_id: str,
+        trigger: str = "manual",
+        retry_of: str | None = None,
     ) -> TaskSubmission: ...
 
-    async def enqueue_media_download(self, media_id: str) -> TaskSubmission: ...
+    async def enqueue_media_download(
+        self,
+        media_id: str,
+        retry_of: str | None = None,
+    ) -> TaskSubmission: ...
 
 
 class InlineSyncTaskDispatcher:
@@ -32,7 +39,10 @@ class InlineSyncTaskDispatcher:
         self.service = service
 
     async def enqueue_account_sync(
-        self, x_user_id: str, trigger: str = "manual"
+        self,
+        x_user_id: str,
+        trigger: str = "manual",
+        retry_of: str | None = None,
     ) -> TaskSubmission:
         result = await self.service.sync_account(x_user_id)
         return TaskSubmission(
@@ -41,7 +51,11 @@ class InlineSyncTaskDispatcher:
             duplicate=False,
         )
 
-    async def enqueue_media_download(self, media_id: str) -> TaskSubmission:
+    async def enqueue_media_download(
+        self,
+        media_id: str,
+        retry_of: str | None = None,
+    ) -> TaskSubmission:
         media = self.service.repository.get_media_record(media_id)
         if media is None:
             return TaskSubmission(f"inline:media:{media_id}", "not_found", True)
@@ -68,13 +82,20 @@ class InlineSyncTaskDispatcher:
 
 class TaskiqSyncTaskDispatcher:
     async def enqueue_account_sync(
-        self, x_user_id: str, trigger: str = "manual"
+        self,
+        x_user_id: str,
+        trigger: str = "manual",
+        retry_of: str | None = None,
     ) -> TaskSubmission:
         from archivex.tasks import enqueue_account_sync
 
-        return await enqueue_account_sync(x_user_id, trigger)
+        return await enqueue_account_sync(x_user_id, trigger, retry_of)
 
-    async def enqueue_media_download(self, media_id: str) -> TaskSubmission:
+    async def enqueue_media_download(
+        self,
+        media_id: str,
+        retry_of: str | None = None,
+    ) -> TaskSubmission:
         from archivex.tasks import enqueue_media_download
 
-        return await enqueue_media_download(media_id)
+        return await enqueue_media_download(media_id, retry_of)

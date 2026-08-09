@@ -91,14 +91,14 @@ repeated requests for an account that is already queued or running return the
 existing task ID. Account detail, pause/resume, manual sync, username history,
 post ownership, and archive paths all use the string `x_user_id`.
 
-## Task queue and dashboard
+## Task queue and task center
 
 The Compose deployment contains six runtime services:
 
 ```text
 redis
 web            built React frontend and API reverse proxy
-archivex       FastAPI and the mounted task dashboard
+archivex       FastAPI and task lifecycle API
 worker-crawl   one concurrent account synchronization
 worker-media   four concurrent media downloads
 scheduler      the single Taskiq scheduler
@@ -106,10 +106,12 @@ scheduler      the single Taskiq scheduler
 
 After signing in to ArchiveX, use **任务中心** in the Web sidebar. In Compose it
 is available at `http://localhost:8000/tasks`; local Vite development uses
-`http://localhost:5173/tasks`. The integrated page shows queued, running,
-completed, failed, and abandoned tasks, execution details, rerun actions, and
-configured schedules. `/ops/tasks` is reserved for internal Taskiq event
-reporting and redirects browser traffic back to the integrated page.
+`http://localhost:5173/tasks`. The integrated page shows logical tasks and every
+execution attempt, including queued, running, waiting-to-retry, completed,
+failed, and abandoned states. Manual retries create a new task linked to their
+source; automatic retries remain attempts of the original task. Task lifecycle
+events are written directly to the local lifecycle database and do not depend
+on the API process being available.
 
 Compose queue settings are declared in `docker-compose.yml`. Important
 operational limits include `TASK_SYNC_TIMEOUT_SECONDS`,

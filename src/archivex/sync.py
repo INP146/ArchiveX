@@ -62,6 +62,15 @@ class ArchiveSyncService:
                 x_user_id=x_user_id, username=x_user_id, status="error", error="account not found"
             )
 
+        interrupted_runs = self.repository.interrupt_running_sync_runs(
+            account_x_user_id=x_user_id
+        )
+        if interrupted_runs:
+            logger.warning(
+                "Marked %d stale synchronization run(s) as interrupted for X user %s",
+                interrupted_runs,
+                x_user_id,
+            )
         username = account.current_username or x_user_id
         run_id = self.repository.start_sync_run(x_user_id)
         posts_seen = 0

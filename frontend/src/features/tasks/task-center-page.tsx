@@ -36,6 +36,7 @@ const STATUS_META: Record<string, { label: string; className: string }> = {
   completed: { label: "已完成", className: "is-completed" },
   failure: { label: "失败", className: "is-failure" },
   queued: { label: "等待中", className: "is-queued" },
+  retry_scheduled: { label: "等待重试", className: "is-retrying" },
   abandoned: { label: "已中断", className: "is-abandoned" },
   unknown: { label: "未知", className: "is-abandoned" }
 };
@@ -79,6 +80,7 @@ export function TaskListPage() {
     { value: null, label: "全部" },
     { value: "in_progress", label: "运行中" },
     { value: "queued", label: "等待中" },
+    { value: "retry_scheduled", label: "等待重试" },
     { value: "completed", label: "已完成" },
     { value: "failure", label: "失败" },
     { value: "abandoned", label: "已中断" }
@@ -92,6 +94,7 @@ export function TaskListPage() {
       <section className="x-task-metrics" aria-label="队列状态概览">
         <Metric icon={<FiActivity />} label="运行中" value={tasks.data?.counts.in_progress} tone="running" active={status === "in_progress"} onClick={() => selectStatus("in_progress")} />
         <Metric icon={<FiInbox />} label="等待中" value={tasks.data?.counts.queued} tone="queued" active={status === "queued"} onClick={() => selectStatus("queued")} />
+        <Metric icon={<FiClock />} label="等待重试" value={tasks.data?.counts.retry_scheduled} tone="retrying" active={status === "retry_scheduled"} onClick={() => selectStatus("retry_scheduled")} />
         <Metric icon={<FiCheckCircle />} label="已完成" value={tasks.data?.counts.completed} tone="completed" active={status === "completed"} onClick={() => selectStatus("completed")} />
         <Metric icon={<FiAlertCircle />} label="异常" value={tasks.data?.counts.failure} tone="failure" active={status === "failure"} onClick={() => selectStatus("failure")} />
       </section>
@@ -197,7 +200,7 @@ export function TaskDetailsPage({ taskId }: { taskId: string }) {
     queryFn: () => getTask(taskId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "queued" || status === "in_progress" ? 2_000 : false;
+      return status === "queued" || status === "in_progress" || status === "retry_scheduled" ? 2_000 : false;
     }
   });
   const rerun = useMutation({
@@ -333,12 +336,32 @@ function TaskDetail({ task }: { task: TaskRecord }) {
       <dl className="x-task-facts">
         <div><dt>任务 ID</dt><dd><code>{task.id}</code></dd></div>
         <div><dt>执行队列</dt><dd>{queueLabel(task.worker)}</dd></div>
+        <div><dt>当前尝试</dt><dd>{task.current_attempt} / {task.max_attempts}</dd></div>
+        {task.retry_of && <div><dt>重试来源</dt><dd><Link to="/tasks/$taskId" params={{ taskId: task.retry_of }}><code>{task.retry_of}</code></Link></dd></div>}
         <div><dt>进入队列</dt><dd>{formatDate(task.queued_at, true)}</dd></div>
         <div><dt>开始时间</dt><dd>{formatDate(task.started_at, true)}</dd></div>
         <div><dt>完成时间</dt><dd>{formatDate(task.finished_at, true)}</dd></div>
+        {task.next_retry_at && <div><dt>下次重试</dt><dd>{formatDate(task.next_retry_at, true)}</dd></div>}
         <div><dt>执行耗时</dt><dd>{formatDuration(task.duration_ms)}</dd></div>
       </dl>
       {task.error && <DetailBlock title="错误" value={task.error} error />}
+      {task.attempts && task.attempts.length > 0 && (
+        <section className="x-task-attempts">
+          <h3>执行尝试</h3>
+          {task.attempts.map((attempt) => (
+            <div className="x-task-attempt" key={attempt.attempt}>
+              <div>
+                <strong>第 {attempt.attempt} 次</strong>
+                <StatusBadge taskStatus={attempt.status} />
+              </div>
+              <span>{formatDate(attempt.started_at ?? attempt.queued_at, true)}</span>
+              <span>{formatDuration(attempt.duration_ms)}</span>
+              {attempt.next_retry_at && <span>下次 {formatDate(attempt.next_retry_at, true)}</span>}
+              {attempt.error && <pre>{attempt.error}</pre>}
+            </div>
+          ))}
+        </section>
+      )}
       <DetailBlock title="参数" value={{ args: task.args, kwargs: task.kwargs }} />
       {task.result !== null && <DetailBlock title="执行结果" value={task.result} />}
     </div>
@@ -366,7 +389,7 @@ function TaskState({ message, error = false }: { message: string; error?: boolea
 function taskLabel(name: string) { return TASK_NAMES[name] ?? name; }
 function canRerunTask(task: TaskRecord) {
   const rerunnable = task.name === "archivex.sync_account" || task.name === "archivex.download_media";
-  return rerunnable && task.status !== "queued" && task.status !== "in_progress";
+  return rerunnable && !["queued", "in_progress", "retry_scheduled"].includes(task.status);
 }
 function shortId(id: string) { return id.split("-")[0]; }
 function queueLabel(queue: string) {

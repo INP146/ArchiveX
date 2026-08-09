@@ -1,21 +1,27 @@
 # ArchiveX 队列系统审查报告
 
 - 审查日期：2026-08-08
+- 二次复核：2026-08-09
 - 审查范围：Taskiq/Redis 队列、调度器、重试、去重锁、任务中心、部署与健康检查
 - 审查方式：静态代码审查、已安装 Taskiq 0.12.x 行为核对、现有 Redis/SQLite 运行数据只读抽样、自动化测试
 - 测试结果：`59 passed, 1 warning`（`.venv/bin/pytest -q`）
 
+> 本文保留首次审查时的故障证据。2026-08-09 二次复核发现第一次修复仍缺少统一生命周期模型，补充为 Q-08；最终修复与实现边界见 [`QUEUE_SYSTEM_FIXES.md`](./QUEUE_SYSTEM_FIXES.md)。
+
 ## 1. 结论
 
-当前实现已经具备抓取/媒体双队列、Redis Stream 持久化、消费确认、超时回收、指数退避、任务去重和任务中心，基础方向正确。但尚不适合在无人值守场景下直接视为“可靠队列”：本次确认了 2 个高风险问题、4 个中风险问题和 1 个低风险一致性问题。
+首次审查确认的 Q-01 至 Q-07 均为真实问题，不是伪问题。但二次复核也确认：第一次修复虽然解除了 Dashboard HTTP 上报对执行面的阻塞，却错误地认为“异步请求 + 单行 upsert”足以处理乱序和重试。这个判断不成立，因此新增一个结构性高风险问题 Q-08。
 
 最优先需要解决的是：
 
 1. 永久媒体失败不会释放去重锁，导致任务中心显示“可重试”但实际无法立即重试。
 2. Dashboard 上报位于发布和执行的关键路径；Dashboard/API 短暂不可用会阻止任务发布，或让已消费消息等待完整的 Redis reclaim 周期，调度触发还可能整轮丢失。
 3. 发布失败的回滚依赖同一个故障中的 Redis，回滚再次失败时会留下永久 `queued` 记录和最长一小时的阻塞锁。
+4. 第三方 Dashboard 的“一任务一行”模型无法表达自动重试的多次 attempt，并发事件乱序还会让迟到的 `queued` 覆盖失败或完成状态。
+5. taskiq-redis 只在读到新 Stream 消息后回收 pending；队列安静时，旧 consumer 遗留的 pending 永远不会被接管。
+6. 本地启动脚本不检查已脱离父进程的旧 worker/scheduler，重复启动会产生两套消费者和调度器；broker 默认批量领取 100 条，又会让单个旧 consumer 占住远超处理能力的消息。
 
-## 2. 当前架构
+## 2. 审查时的原架构
 
 ```text
 Taskiq Scheduler
@@ -48,6 +54,10 @@ archivex:media (Redis Stream) ---> media worker (并发 4)
 | Q-05 | 中 | 去重 TTL 与任务超时没有配置约束或续租 | 非默认配置下同一媒体可并发下载 |
 | Q-06 | 中 | 健康检查无法反映队列是否工作 | Redis、worker、scheduler 停止时系统仍报告健康 |
 | Q-07 | 低 | API 启动会修改 worker 所有的同步运行状态 | API 单独重启时任务历史短暂误报为 interrupted |
+| Q-08 | 高 | 没有统一的逻辑任务/执行尝试模型 | 状态乱序、attempt 错位、自动与手动重试关系不清，任务表现为长期等待 |
+| Q-09 | 高 | pending reclaim 依赖先读到新消息 | 队列没有新任务时，崩溃 worker 遗留的任务永久卡住 |
+| Q-10 | 高 | 启动脚本允许重复队列进程 | 两套 scheduler/worker 同时运行，旧代码继续消费新任务并上报已删除接口 |
+| Q-11 | 中 | Stream 领取批量大于 worker 处理槽 | 单个 consumer 可占住大量消息，其他健康 worker 无法及时接管 |
 
 ## 4. 详细发现
 
@@ -170,6 +180,55 @@ archivex:media (Redis Stream) ---> media worker (并发 4)
 - 由持有任务的 worker 更新自身 sync run；恢复逻辑应基于 worker lease/heartbeat 过期，而不是 API 进程启动。
 - 状态更新增加所有权 token 或条件更新，避免无关进程覆盖活动运行。
 
+### Q-08：任务生命周期模型无法表达重试并抵抗乱序（高）
+
+**证据**
+
+- Taskiq 自动重试复用原 `task_id`，手动重试创建新 `task_id`；这是两种不同操作语义，但原任务中心既没有 attempt 表，也没有 `retry_of` 关系。
+- taskiq-dashboard 0.4.4 只保存“一任务一行”。同一 ID 的第 2 至第 N 次自动重试会覆盖上一轮信息，无法回答“执行过几次、每次为什么失败、下次何时运行”。
+- queued、started、executed 通过独立并发 HTTP 请求上报，没有同一任务的顺序保证。即使接口支持缺行 upsert，迟到的 queued 仍可覆盖已到达的 failure/completed；“可 upsert”不等于“可处理乱序”。
+- SmartRetry 构造下一次 retry kicker 时直接复用 `message.labels`。`with_labels(_retries=...)` 会原地修改当前消息，导致当前 attempt 在完成事件上报前提前加一。
+- 延迟重试保存在独立 Redis schedule 键中，原健康检查只观察 Redis Stream。任务离开 Stream、等待 retry schedule 时，系统无法区分“正常等待下次尝试”和“scheduler 已失效”。
+
+指定任务 `f0b757aa-c02d-46de-afda-fd7f665d7211` 的最终只读记录也验证了真实执行故障：它在第 5/5 次失败，底层错误为旧 media worker 启动 Python 子进程时继承失效标准文件描述符，报 `OSError: [Errno 9] Bad file descriptor`。这不是单纯的 UI 文案问题。
+
+**建议**
+
+- 由应用自己维护 `logical task` 与 `attempt` 两层生命周期，不再让第三方 Dashboard 充当队列状态源。
+- 所有事件更新必须以 `(task_id, attempt)` 为条件，终态不可被同 attempt 的迟到 queued/started 降级，高 attempt 才可推进逻辑任务。
+- 自动重试沿用逻辑任务 ID 并增加 attempt；手动重试创建新逻辑任务，通过 `retry_of` 关联来源。
+- retry schedule 必须写入明确的 `retry_scheduled` 和 `next_retry_at`，readiness 同时检查 Stream、heartbeat 和过期 retry bucket。
+- 构造下一次 retry 消息前复制 labels，禁止修改当前 attempt 的消息元数据。
+
+### Q-09：队列安静时不会回收旧 pending（高）
+
+**证据**
+
+- taskiq-redis 1.2.3 的 `RedisStreamBroker.listen()` 在 `XREADGROUP` 没有返回新消息时直接 `continue`，`XAUTOCLAIM` 位于该分支之后。
+- 因此 reclaim 不是周期行为，而是由另一条新消息触发。最后一条消息被旧 worker 消费但未确认后，如果队列不再入队，它永远没有机会被接管。
+- 现场只读检查发现 media 与 crawl Stream 各有 1 条 pending，idle 均约 16 小时、delivery count 均为 1、lag 为 0；对应生命周期行仍为 queued，retry schedule 和去重锁均不存在。
+- 两条现场任务分别为 media attempt 4/5 的 `ef1b5e51-281a-4ab6-a818-9b395d2fd973`，以及 crawl attempt 1/5 的 `f5c7176b-ee58-4760-a459-ecf11d8815da`。这直接证明“队列前面没任务却一直等待”不是正常退避。
+
+**建议**
+
+- 覆盖 broker 的 listen 循环，每轮先执行 `XAUTOCLAIM`，再阻塞读取新消息；reclaim 不得依赖新流量。
+- 多 worker 使用短期所有权锁串行化 reclaim，锁不可用时跳过本轮，不阻塞正常消费。
+- 增加“`XREADGROUP` 始终为空但存在过期 pending”测试，必须仍能产出并执行该消息。
+
+### Q-10/Q-11：重复进程与过量预取破坏消费者所有权
+
+**证据**
+
+- `scripts/start_backend.py` 原先只检查新启动的子进程，不扫描同一项目已经存在的 Taskiq 进程。父启动器被强制退出后，使用独立 session 的 worker/scheduler 会成为孤立进程，下一次启动仍会再创建一套。
+- 2026-08-09 17:54 现场同时出现昨晚启动的 3 个旧 Taskiq 进程和刚启动的 3 个新进程。旧 worker 继续向已删除的 `/ops/tasks/.../started` 上报并返回 404，证明新旧代码同时消费同一 Stream。
+- taskiq-redis 默认 `xread_count=100`、`unacknowledged_batch_size=100`，但 crawl/media 实际处理槽分别只有 1/4。现场旧 media consumer 一次持有 618 条 pending，新 worker 的 Stream lag 虽为 0，却无法取得这些已经分配的消息。
+
+**建议**
+
+- 本地启动前扫描项目专属 Taskiq 命令，发现存活 worker/scheduler 时拒绝启动并列出 PID，要求先清理旧 stack。
+- `XREADGROUP` 和 `XAUTOCLAIM` 批量必须与对应 worker 并发数一致，crawl 为 1、media 为 4，避免 consumer 囤积超出执行槽的消息。
+- readiness 不应只看 lag；pending 数、最老 idle、consumer heartbeat 必须联合判断。
+
 ## 5. 已有优点
 
 - 抓取与媒体使用独立 Stream 和并发策略，避免媒体下载阻塞账号抓取。
@@ -181,7 +240,7 @@ archivex:media (Redis Stream) ---> media worker (并发 4)
 
 ## 6. 测试覆盖评估
 
-现有 59 个测试全部通过，覆盖了基本去重、发布失败后的正常回滚、Dashboard 状态重置、永久错误分类、下载超时和任务中心 API。主要缺口集中在跨组件故障与真实任务生命周期：
+首次审查时 59 个测试全部通过，但只覆盖了基本去重、发布失败后的正常回滚、Dashboard 状态重置、永久错误分类、下载超时和任务中心 API。它们没有证明完整任务生命周期正确。主要缺口集中在跨组件故障与真实任务生命周期：
 
 - 永久错误后的锁释放与立即重试。
 - Dashboard/API 在 pre-send、pre-execute、post-execute 阶段不可用。
@@ -190,6 +249,9 @@ archivex:media (Redis Stream) ---> media worker (并发 4)
 - worker 被终止后的 Redis Stream reclaim。
 - 去重 TTL 过期时的并发执行。
 - API 重启时仍有 crawl worker 活动。
+- 自动重试多 attempt 历史、事件乱序和 queued/started 丢失后的终态恢复。
+- retry schedule 逾期但 Stream 中没有消息时的 readiness。
+- Stream 没有新消息时对旧 consumer pending 的主动 reclaim。
 
 建议增加 Redis + API + worker 的最小集成测试环境；当前多数队列测试使用 FakeRedis/FakeTask，只能验证单函数分支，无法证明消息发布、确认、重试调度和锁状态的原子关系。
 
@@ -202,5 +264,9 @@ archivex:media (Redis Stream) ---> media worker (并发 4)
 5. 加配置不变量和锁续租（Q-05）。
 6. 增加队列 readiness、heartbeat、积压指标和告警（Q-06）。
 7. 将 sync run 恢复逻辑迁移到 worker lease 模型（Q-07）。
+8. 用应用自有的逻辑任务/attempt 存储替换第三方 Dashboard 生命周期模型（Q-08）。
+9. 修复 broker reclaim 循环，确保安静队列也能接管过期 pending（Q-09）。
+10. 阻止同一项目重复启动 Taskiq 进程（Q-10）。
+11. 将 Stream 新消息读取和 pending reclaim 批量限制为实际 worker 并发（Q-11）。
 
 完成前 3 项后，队列的失败语义才基本符合“任务至少一次、可立即人工恢复、观测面故障不影响执行面”的可靠性目标。

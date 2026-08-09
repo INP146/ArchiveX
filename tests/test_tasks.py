@@ -7,9 +7,10 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from taskiq.exceptions import NoResultError
+from taskiq.abc.schedule_source import ScheduleSource
 from taskiq.message import TaskiqMessage
 from taskiq.result import TaskiqResult
 
@@ -22,7 +23,7 @@ class FakeRedis:
     def __init__(self):
         self.values = {}
 
-    async def set(self, key, value, *, ex, nx):
+    async def set(self, key, value, *, ex=None, nx=False):
         if nx and key in self.values:
             return False
         self.values[key] = value
@@ -34,7 +35,17 @@ class FakeRedis:
     async def expire(self, key, seconds):
         return key in self.values
 
-    async def eval(self, script, key_count, key, expected):
+    async def eval(self, script, key_count, key, expected, *args):
+        if "local owner" in script:
+            owner = self.values.get(key)
+            if owner == expected:
+                return 1
+            if owner is None:
+                self.values[key] = expected
+                return "OK"
+            return 0
+        if "expire" in script:
+            return int(self.values.get(key) == expected)
         if self.values.get(key) == expected:
             del self.values[key]
             return 1
@@ -49,12 +60,22 @@ class FakeTask:
         self.should_fail = should_fail
         self.task_id = None
         self.calls = []
+        self.labels = {
+            "queue_name": "archivex:crawl",
+            "retry_on_error": True,
+            "max_retries": 5,
+            "delay": 30,
+        }
 
     def kicker(self):
         return self
 
     def with_task_id(self, task_id):
         self.task_id = task_id
+        return self
+
+    def with_labels(self, **labels):
+        self.labels.update(labels)
         return self
 
     async def kiq(self, *args):
@@ -84,15 +105,21 @@ def test_redis_clients_have_bounded_connection_operations() -> None:
 def test_retry_schedule_failure_becomes_terminal_and_releases_lock(monkeypatch) -> None:
     released = []
 
-    async def fail_retry(*args, **kwargs):
-        raise ConnectionError("redis connection closed")
+    class FailingScheduleSource(ScheduleSource):
+        async def get_schedules(self):
+            return []
+
+        async def add_schedule(self, schedule):
+            raise ConnectionError("redis connection closed")
 
     async def release_lock(message):
         released.append(message.task_id)
 
-    monkeypatch.setattr(tasks.SmartRetryMiddleware, "on_error", fail_retry)
     monkeypatch.setattr(tasks, "_release_failed_retry_lock", release_lock)
-    middleware = tasks.ResilientSmartRetryMiddleware()
+    middleware = tasks.ResilientSmartRetryMiddleware(
+        schedule_source=FailingScheduleSource(),
+    )
+    middleware.set_broker(SimpleNamespace(id_generator=lambda: uuid.uuid4().hex))
     message = TaskiqMessage(
         task_id=str(uuid.uuid4()),
         task_name="archivex.download_media",
@@ -119,12 +146,12 @@ def test_retry_schedule_failure_becomes_terminal_and_releases_lock(monkeypatch) 
 
 
 def test_permanent_media_failure_is_not_automatically_retried(monkeypatch) -> None:
-    retried = []
+    released = []
 
-    async def record_retry(*args, **kwargs):
-        retried.append(True)
+    async def release_lock(message):
+        released.append(message.task_id)
 
-    monkeypatch.setattr(tasks.SmartRetryMiddleware, "on_error", record_retry)
+    monkeypatch.setattr(tasks, "_release_failed_retry_lock", release_lock)
     middleware = tasks.ResilientSmartRetryMiddleware()
     message = TaskiqMessage(
         task_id=str(uuid.uuid4()),
@@ -143,12 +170,103 @@ def test_permanent_media_failure_is_not_automatically_retried(monkeypatch) -> No
 
     asyncio.run(middleware.on_error(message, result, error))
 
-    assert retried == []
+    assert released == [message.task_id]
     assert result.error is error
     assert _automatic_retries_exhausted({
         "error": repr(error),
         "labels": {"max_retries": 5, "_retries": 0},
     }) is True
+
+
+def test_automatic_retry_is_one_logical_task_with_distinct_attempts(
+    tmp_path, monkeypatch,
+) -> None:
+    class MemoryScheduleSource(ScheduleSource):
+        def __init__(self):
+            self.schedules = []
+
+        async def get_schedules(self):
+            return self.schedules
+
+        async def add_schedule(self, schedule):
+            self.schedules.append(schedule)
+
+    repository = TaskCenterRepository(tmp_path / "tasks.sqlite3", 3600, "archivex:crawl")
+    monkeypatch.setattr(tasks, "_task_center_repository", lambda: repository)
+    source = MemoryScheduleSource()
+    retry = tasks.ResilientSmartRetryMiddleware(
+        default_delay=30,
+        use_jitter=False,
+        schedule_source=source,
+    )
+    retry.set_broker(SimpleNamespace(id_generator=lambda: uuid.uuid4().hex))
+    lifecycle = tasks.TaskLifecycleMiddleware()
+    task_id = str(uuid.uuid4())
+    first = TaskiqMessage(
+        task_id=task_id,
+        task_name="archivex.download_media",
+        labels={
+            "queue_name": "archivex:media",
+            "retry_on_error": True,
+            "max_retries": 5,
+            "delay": 30,
+        },
+        args=["media-id"],
+        kwargs={},
+    )
+    failure = RuntimeError("download failed")
+    result = TaskiqResult(
+        is_err=True,
+        return_value=None,
+        execution_time=1.0,
+        error=failure,
+    )
+
+    async def run_first_attempt():
+        await lifecycle.post_send(first)
+        await lifecycle.pre_execute(first)
+        await retry.on_error(first, result, failure)
+        await lifecycle.post_execute(first, result)
+
+    asyncio.run(run_first_attempt())
+
+    waiting = repository.get_task(task_id)
+    assert waiting["status"] == "retry_scheduled"
+    assert waiting["error"] == "RuntimeError('download failed')"
+    assert waiting["current_attempt"] == 1
+    assert waiting["next_retry_at"] is not None
+    assert isinstance(result.error, tasks.NoResultError)
+    assert len(source.schedules) == 1
+    assert source.schedules[0].task_id == task_id
+    assert source.schedules[0].labels["_retries"] == "1"
+
+    second = TaskiqMessage(
+        task_id=task_id,
+        task_name=first.task_name,
+        labels=source.schedules[0].labels,
+        args=first.args,
+        kwargs={},
+    )
+
+    async def run_second_attempt():
+        await lifecycle.post_send(second)
+        await lifecycle.pre_execute(second)
+        await lifecycle.post_execute(second, TaskiqResult(
+            is_err=False,
+            return_value={"status": "success"},
+            execution_time=1.0,
+            error=None,
+        ))
+
+    asyncio.run(run_second_attempt())
+
+    completed = repository.get_task(task_id)
+    assert completed["status"] == "completed"
+    assert completed["current_attempt"] == 2
+    assert [attempt["status"] for attempt in completed["attempts"]] == [
+        "completed",
+        "failure",
+    ]
 
 
 def test_account_enqueue_coalesces_duplicate_tasks(monkeypatch) -> None:
@@ -170,15 +288,30 @@ def test_account_enqueue_coalesces_duplicate_tasks(monkeypatch) -> None:
     assert len(fake_task.calls) == 1
 
 
+def test_execution_claim_and_extension_never_refresh_another_owner(monkeypatch) -> None:
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(tasks, "_redis", lambda: fake_redis)
+
+    async def exercise_locks():
+        assert await tasks._claim_execution("lock", "first") is True
+        await tasks._extend_execution_lock("lock", "first")
+        assert await tasks._claim_execution("lock", "second") is False
+        with pytest.raises(RuntimeError, match="ownership was lost"):
+            await tasks._extend_execution_lock("lock", "second")
+
+    asyncio.run(exercise_locks())
+
+    assert fake_redis.values["lock"] == "first"
+
+
 def test_enqueue_failure_releases_dedupe_lock(monkeypatch) -> None:
     fake_redis = FakeRedis()
     fake_task = FakeTask(should_fail=True)
     abandoned = []
 
     class FakeTaskCenter:
-        def abandon_queued_task(self, task_id, error):
+        def record_publish_failed(self, task_id, name, worker, args, kwargs, labels, error):
             abandoned.append((task_id, error))
-            return True
 
     monkeypatch.setattr(tasks, "_redis", lambda: fake_redis)
     monkeypatch.setattr(tasks, "sync_account_task", fake_task)
@@ -194,28 +327,47 @@ def test_enqueue_failure_releases_dedupe_lock(monkeypatch) -> None:
     )]
 
 
-def test_abandon_queued_task_finishes_dashboard_record(tmp_path) -> None:
+def test_enqueue_failure_still_updates_lifecycle_when_lock_rollback_fails(
+    monkeypatch,
+) -> None:
+    class RollbackFailingRedis(FakeRedis):
+        async def eval(self, script, key_count, key, expected):
+            raise ConnectionError("redis still unavailable")
+
+    fake_redis = RollbackFailingRedis()
+    fake_task = FakeTask(should_fail=True)
+    abandoned = []
+
+    class FakeTaskCenter:
+        def record_publish_failed(self, task_id, name, worker, args, kwargs, labels, error):
+            abandoned.append((task_id, error))
+
+    monkeypatch.setattr(tasks, "_redis", lambda: fake_redis)
+    monkeypatch.setattr(tasks, "sync_account_task", fake_task)
+    monkeypatch.setattr(tasks, "_task_center_repository", FakeTaskCenter)
+
+    with pytest.raises(RuntimeError, match="redis unavailable"):
+        asyncio.run(tasks.enqueue_account_sync("42"))
+
+    assert abandoned == [(
+        fake_task.task_id,
+        "Task was not published to the broker: RuntimeError: redis unavailable",
+    )]
+
+
+def test_abandon_queued_task_finishes_lifecycle_record(tmp_path) -> None:
     database_path = tmp_path / "tasks.sqlite3"
     task_id = uuid.uuid4()
-    with sqlite3.connect(database_path) as connection:
-        connection.execute(
-            """CREATE TABLE tasks (
-                id CHAR(32) PRIMARY KEY, name TEXT NOT NULL, status INTEGER NOT NULL,
-                worker TEXT NOT NULL, args JSON NOT NULL, kwargs JSON NOT NULL,
-                labels JSON NOT NULL, result JSON, error TEXT, queued_at DATETIME,
-                started_at DATETIME, finished_at DATETIME
-            )"""
-        )
-        connection.execute(
-            """INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                task_id.hex, "archivex.sync_account", 3, "archivex:crawl",
-                json.dumps(["42", "manual"]), "{}", "{}", None, None,
-                "2026-08-08 12:00:00", None, None,
-            ),
-        )
-
     repository = TaskCenterRepository(database_path, 3600, "archivex:crawl")
+    repository.record_queued(
+        str(task_id),
+        "archivex.sync_account",
+        "archivex:crawl",
+        ["42", "manual"],
+        {},
+        {},
+        "2026-08-08T12:00:00Z",
+    )
 
     assert repository.abandon_queued_task(str(task_id), "publish failed") is True
     task = repository.get_task(str(task_id))
@@ -229,7 +381,7 @@ def test_abandon_queued_task_finishes_dashboard_record(tmp_path) -> None:
     assert repository.delete_abandoned_tasks() == 0
 
 
-def test_reset_retried_task_clears_previous_attempt_lifecycle(tmp_path) -> None:
+def test_legacy_active_rows_are_not_imported_as_live_tasks(tmp_path) -> None:
     database_path = tmp_path / "tasks.sqlite3"
     task_id = uuid.uuid4()
     with sqlite3.connect(database_path) as connection:
@@ -244,43 +396,138 @@ def test_reset_retried_task_clears_previous_attempt_lifecycle(tmp_path) -> None:
         connection.execute(
             """INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                task_id.hex, "archivex.download_media", 2, "archivex:media",
-                "[]", "{}", "{}", "old result", "old error",
-                "2026-08-08 12:01:00", "2026-08-08 12:00:00",
-                "2026-08-08 12:00:30",
+                task_id.hex, "archivex.download_media", 3, "archivex:media",
+                json.dumps(["media-id"]), "{}", "{}", None, None,
+                "2026-08-08 12:00:00", None, None,
             ),
         )
 
     repository = TaskCenterRepository(database_path, 3600, "archivex:crawl")
 
-    assert repository.reset_retried_task(str(task_id)) is True
-    task = repository.get_task(str(task_id))
-    assert task is not None
-    assert task["status"] == "queued"
-    assert task["started_at"] is None
-    assert task["finished_at"] is None
-    assert task["result"] is None
-    assert task["error"] is None
-    assert task["duration_ms"] is None
+    migrated = repository.get_task(str(task_id))
+    assert migrated["status"] == "abandoned"
+    assert "not confirmed" in migrated["error"]
 
-
-def test_retry_middleware_resets_dashboard_and_discards_consumed_schedule(monkeypatch) -> None:
-    reset = []
-    events = []
-
-    class FakeTaskCenter:
-        def reset_retried_task(self, task_id):
-            reset.append(task_id)
-            return True
-
-    async def record_event(endpoint, payload):
-        events.append((endpoint, payload))
-
-    middleware = tasks.MountedTaskiqAdminMiddleware(
-        url="http://example.test", api_token="token", taskiq_broker_name="archivex:media"
+    repository.record_started(
+        str(task_id),
+        "archivex.download_media",
+        "archivex:media",
+        ["media-id"],
+        {},
+        {},
+        "2026-08-08T12:01:00Z",
     )
-    monkeypatch.setattr(tasks, "_task_center_repository", FakeTaskCenter)
-    monkeypatch.setattr(middleware, "_spawn_request", record_event)
+    assert repository.get_task(str(task_id))["status"] == "in_progress"
+
+
+def test_retry_attempts_preserve_failure_history_and_reject_late_events(tmp_path) -> None:
+    repository = TaskCenterRepository(tmp_path / "tasks.sqlite3", 3600, "archivex:crawl")
+    task_id = str(uuid.uuid4())
+    first = {"max_retries": "5"}
+    second = {"max_retries": "5", "_retries": "1"}
+
+    repository.record_queued(
+        task_id, "archivex.download_media", "archivex:media", ["media-id"], {}, first,
+        "2026-08-08T12:00:00Z",
+    )
+    repository.record_started(
+        task_id, "archivex.download_media", "archivex:media", ["media-id"], {}, first,
+        "2026-08-08T12:00:01Z",
+    )
+    repository.record_retry_scheduled(
+        task_id, first, "first failure", "2026-08-08T12:00:31Z",
+        "2026-08-08T12:00:02Z",
+    )
+    assert repository.get_task(task_id)["status"] == "retry_scheduled"
+
+    repository.record_started(
+        task_id, "archivex.download_media", "archivex:media", ["media-id"], {}, second,
+        "2026-08-08T12:00:32Z",
+    )
+    repository.record_finished(
+        task_id, second, result={"ok": True}, error=None,
+        finished_at="2026-08-08T12:00:33Z",
+    )
+    repository.record_queued(
+        task_id, "archivex.download_media", "archivex:media", ["media-id"], {}, second,
+        "2026-08-08T12:00:31Z",
+    )
+
+    task = repository.get_task(task_id)
+    assert task["status"] == "completed"
+    assert task["current_attempt"] == 2
+    assert [attempt["status"] for attempt in task["attempts"]] == ["completed", "failure"]
+    assert task["attempts"][1]["error"] == "first failure"
+
+
+def test_terminal_events_recover_tasks_when_earlier_lifecycle_events_are_missing(
+    tmp_path,
+) -> None:
+    repository = TaskCenterRepository(tmp_path / "tasks.sqlite3", 3600, "archivex:crawl")
+    completed_id = str(uuid.uuid4())
+    completed_labels = {"max_retries": "5", "_retries": "2"}
+
+    repository.record_finished(
+        completed_id,
+        completed_labels,
+        result={"ok": True},
+        error=None,
+        finished_at="2026-08-08T12:00:03Z",
+        name="archivex.download_media",
+        worker="archivex:media",
+        args=["media-id"],
+        kwargs={},
+    )
+
+    completed = repository.get_task(completed_id)
+    assert completed is not None
+    assert completed["status"] == "completed"
+    assert completed["current_attempt"] == 3
+    assert completed["name"] == "archivex.download_media"
+    assert completed["args"] == ["media-id"]
+    assert completed["attempts"] == [{
+        "attempt": 3,
+        "status": "completed",
+        "labels": completed_labels,
+        "result": {"ok": True},
+        "error": None,
+        "queued_at": None,
+        "started_at": None,
+        "finished_at": "2026-08-08T12:00:03+00:00",
+        "next_retry_at": None,
+        "duration_ms": None,
+    }]
+
+    retrying_id = str(uuid.uuid4())
+    retrying_labels = {"max_retries": "5", "_retries": "3"}
+    repository.record_retry_scheduled(
+        retrying_id,
+        retrying_labels,
+        "fourth failure",
+        "2026-08-08T12:01:00Z",
+        "2026-08-08T12:00:04Z",
+        name="archivex.sync_account",
+        worker="archivex:crawl",
+        args=["42", "scheduled"],
+        kwargs={},
+    )
+
+    retrying = repository.get_task(retrying_id)
+    assert retrying is not None
+    assert retrying["status"] == "retry_scheduled"
+    assert retrying["current_attempt"] == 4
+    assert retrying["next_retry_at"] == "2026-08-08T12:01:00+00:00"
+    assert retrying["attempts"][0]["attempt"] == 4
+    assert retrying["attempts"][0]["status"] == "failure"
+    assert retrying["attempts"][0]["error"] == "fourth failure"
+
+
+def test_lifecycle_middleware_records_attempts_and_discards_consumed_schedule(
+    tmp_path, monkeypatch,
+) -> None:
+    repository = TaskCenterRepository(tmp_path / "tasks.sqlite3", 3600, "archivex:crawl")
+    monkeypatch.setattr(tasks, "_task_center_repository", lambda: repository)
+    middleware = tasks.TaskLifecycleMiddleware()
     message = TaskiqMessage(
         task_id=str(uuid.uuid4()),
         task_name="archivex.download_media",
@@ -290,29 +537,97 @@ def test_retry_middleware_resets_dashboard_and_discards_consumed_schedule(monkey
     )
 
     async def run_hooks():
-        await middleware.pre_send(message)
+        await middleware.post_send(message)
         await middleware.pre_execute(message)
         await middleware.post_execute(message, TaskiqResult(
             is_err=True,
             return_value=None,
             execution_time=1.0,
-            error=NoResultError(),
+            error=RuntimeError("failed"),
         ))
 
     asyncio.run(run_hooks())
 
-    assert reset == [message.task_id, message.task_id]
     assert "schedule_id" not in message.labels
-    assert [event[0].rsplit("/", 1)[-1] for event in events] == [
-        "queued", "started", "executed",
-    ]
+    task = repository.get_task(message.task_id)
+    assert task["status"] == "failure"
+    assert task["current_attempt"] == 2
+    assert task["attempts"][0]["error"] == "RuntimeError('failed')"
+
+
+def test_lifecycle_storage_failure_does_not_block_queue_hooks(monkeypatch) -> None:
+    class FailedRepository:
+        def __getattr__(self, name):
+            def fail(*args, **kwargs):
+                raise sqlite3.OperationalError("database unavailable")
+            return fail
+
+    middleware = tasks.TaskLifecycleMiddleware()
+    monkeypatch.setattr(tasks, "_task_center_repository", FailedRepository)
+    message = TaskiqMessage(
+        task_id=str(uuid.uuid4()),
+        task_name="archivex.download_media",
+        labels={},
+        args=["media-id"],
+        kwargs={},
+    )
+
+    async def run_hooks():
+        await middleware.post_send(message)
+        await middleware.pre_execute(message)
+        await middleware.post_execute(message, TaskiqResult(
+            is_err=False,
+            return_value={"ok": True},
+            execution_time=1.0,
+            error=None,
+        ))
+
+    asyncio.run(run_hooks())
+
+
+def test_scheduler_dispatch_state_survives_restart_and_serializes_dispatch(monkeypatch) -> None:
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(tasks, "_redis", lambda: fake_redis)
+    monkeypatch.setattr(tasks.settings, "archive_sync_interval_seconds", 60)
+    monkeypatch.setattr(tasks.settings, "archive_schedule_run_immediately_on_start", False)
+
+    async def exercise_gate():
+        assert await tasks._begin_schedule_dispatch("first", now=100) == "not_due"
+        assert await tasks._begin_schedule_dispatch("restart", now=130) == "not_due"
+        assert await tasks._begin_schedule_dispatch("due", now=160) == "due"
+        await tasks._renew_schedule_dispatch("due")
+        assert await tasks._begin_schedule_dispatch("concurrent", now=161) == "busy"
+        await tasks._finish_schedule_dispatch("due", completed=True, now=161)
+        assert await tasks._begin_schedule_dispatch("another-restart", now=180) == "not_due"
+
+    asyncio.run(exercise_gate())
+
+    assert fake_redis.values[tasks._SCHEDULE_LAST_DISPATCH_KEY] == "161"
+    schedule = tasks.schedule_enabled_accounts_task.labels["schedule"][0]
+    assert schedule["schedule_id"] == "archivex-enabled-account-sync"
+
+
+def test_scheduler_immediate_start_is_explicit(monkeypatch) -> None:
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(tasks, "_redis", lambda: fake_redis)
+    monkeypatch.setattr(tasks.settings, "archive_schedule_run_immediately_on_start", True)
+
+    async def exercise_gate():
+        assert await tasks._begin_schedule_dispatch("first", now=100) == "due"
+        await tasks._finish_schedule_dispatch("first", completed=True, now=101)
+
+    asyncio.run(exercise_gate())
+
+    assert fake_redis.values[tasks._SCHEDULE_LAST_DISPATCH_KEY] == "101"
 
 
 def test_gallery_dl_download_has_a_hard_timeout(tmp_path, monkeypatch) -> None:
     command = []
+    options = {}
 
     def time_out(*args, **kwargs):
         command.extend(args[0])
+        options.update(kwargs)
         raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
 
     monkeypatch.setattr(subprocess, "run", time_out)
@@ -322,6 +637,7 @@ def test_gallery_dl_download_has_a_hard_timeout(tmp_path, monkeypatch) -> None:
         downloader.download("https://example.test/image.jpg", tmp_path, 0)
 
     assert command[:3] == [sys.executable, "-m", "gallery_dl"]
+    assert options["stdin"] is subprocess.DEVNULL
 
 
 def test_gallery_dl_download_supports_an_explicit_executable(tmp_path, monkeypatch) -> None:

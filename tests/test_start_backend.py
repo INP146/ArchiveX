@@ -78,3 +78,25 @@ def test_start_process_applies_only_its_environment_overrides(monkeypatch, tmp_p
         "KEEP": "yes",
         "TASK_WORKER_QUEUE_NAME": "archivex:media",
     }
+
+
+def test_existing_queue_processes_are_discovered_for_this_project(tmp_path, monkeypatch) -> None:
+    taskiq = tmp_path / ".venv" / "bin" / "taskiq"
+
+    def fake_run(command, **kwargs):
+        assert command == ["ps", "-axo", "pid=,command="]
+        return type("Result", (), {
+            "stdout": (
+                f"  101 {tmp_path}/.venv/bin/python {taskiq} worker "
+                "archivex.tasks:broker --workers 1\n"
+                f"  102 {tmp_path}/.venv/bin/python {taskiq} scheduler "
+                "archivex.tasks:scheduler\n"
+                "  103 /other/project/.venv/bin/taskiq worker archivex.tasks:broker\n"
+            ),
+        })()
+
+    monkeypatch.setattr(start_backend.subprocess, "run", fake_run)
+
+    existing = start_backend.find_existing_queue_processes(tmp_path)
+
+    assert [item.pid for item in existing] == [101, 102]

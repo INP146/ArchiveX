@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import secrets
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
 
 from archivex.api import create_api_router, create_auth_router
 from archivex.config import Settings, get_settings
 from archivex.logging import configure_logging
 from archivex.media import GalleryDlMediaDownloader
+from archivex.queue_health import SystemReadinessProbe
 from archivex.session import SessionAccountManager, TwscrapeSessionAccountManager
 from archivex.source import PostSource, TwscrapePostSource
 from archivex.storage import initialize_storage
@@ -56,15 +54,11 @@ def create_app(settings: Settings | None = None, post_source: PostSource | None 
         else InlineSyncTaskDispatcher(service)
     )
     task_center = TaskCenterRepository(
-        app_settings.task_dashboard_db_path,
+        app_settings.task_lifecycle_db_path,
         app_settings.archive_sync_interval_seconds,
         app_settings.task_crawl_queue_name,
     )
-    task_dashboard = None
-    if app_settings.task_queue_enabled and app_settings.task_dashboard_enabled:
-        from archivex.task_dashboard import create_task_dashboard
-
-        task_dashboard = create_task_dashboard(app_settings)
+    readiness_probe = SystemReadinessProbe(app_settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -74,40 +68,15 @@ def create_app(settings: Settings | None = None, post_source: PostSource | None 
             app_settings.archive_data_dir,
             app_settings.twscrape_session_path,
         )
-        interrupted_runs = repository.interrupt_running_sync_runs()
-        if interrupted_runs:
-            logger.warning(
-                "Marked %d unfinished synchronization run(s) as interrupted",
-                interrupted_runs,
-            )
         logger.info(
             "ArchiveX started with %d enabled accounts; task queue %s",
             len(repository.list_enabled_account_ids()),
             "enabled" if app_settings.task_queue_enabled else "disabled",
         )
-        async with AsyncExitStack() as stack:
-            if task_dashboard is not None:
-                dashboard_app = task_dashboard.application
-                await stack.enter_async_context(
-                    dashboard_app.router.lifespan_context(dashboard_app)
-                )
-            elif app_settings.task_queue_enabled:
-                from archivex.tasks import broker
-
-                await broker.startup()
-                stack.push_async_callback(broker.shutdown)
-            yield
+        yield
         logger.info("ArchiveX stopped")
 
     app = FastAPI(title="ArchiveX", version="0.1.0", lifespan=lifespan)
-    if task_dashboard is not None:
-        from archivex.tasks import dashboard_api_token
-
-        app.add_middleware(
-            DashboardAccessMiddleware,
-            dashboard_path=app_settings.task_dashboard_path,
-            dashboard_api_token=dashboard_api_token(app_settings),
-        )
     app.add_middleware(
         SessionMiddleware,
         secret_key=app_settings.web_session_secret or _derived_session_secret(app_settings.web_auth_token),
@@ -130,32 +99,22 @@ def create_app(settings: Settings | None = None, post_source: PostSource | None 
         dispatcher,
         task_center,
     ))
-    if task_dashboard is not None:
-        app.mount(app_settings.task_dashboard_path, task_dashboard.application)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/ready", tags=["system"])
+    async def ready() -> JSONResponse:
+        result = await readiness_probe.check()
+        return JSONResponse(
+            result,
+            status_code=200 if result["status"] == "ready" else 503,
+        )
+
     return app
 
 
-class DashboardAccessMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, *, dashboard_path: str, dashboard_api_token: str) -> None:
-        super().__init__(app)
-        self.dashboard_path = dashboard_path.rstrip("/")
-        self.dashboard_api_token = dashboard_api_token
-
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        if path != self.dashboard_path and not path.startswith(self.dashboard_path + "/"):
-            return await call_next(request)
-        dashboard_token = request.headers.get("access-token")
-        if dashboard_token and secrets.compare_digest(dashboard_token, self.dashboard_api_token):
-            return await call_next(request)
-        if request.method == "GET":
-            return RedirectResponse("/tasks", status_code=303)
-        return JSONResponse({"detail": "internal endpoint"}, status_code=401)
 def _derived_session_secret(auth_token: str) -> str:
     return hashlib.sha256(f"archivex-session:{auth_token}".encode()).hexdigest()
 
