@@ -25,7 +25,13 @@ from archivex.queue_health import QueueServiceHeartbeatMiddleware
 from archivex.source import TwscrapePostSource
 from archivex.storage import ArchiveRepository
 from archivex.sync import ArchiveSyncService
-from archivex.task_center import TaskCenterRepository
+from archivex.task_center import (
+    TASK_ACCOUNT_ID_LABEL,
+    TASK_MEDIA_ID_LABEL,
+    TASK_PARENT_ID_LABEL,
+    TASK_TRIGGER_LABEL,
+    TaskCenterRepository,
+)
 from archivex.task_dispatcher import TaskSubmission
 
 logger = logging.getLogger(__name__)
@@ -521,7 +527,16 @@ async def enqueue_account_sync(
     if not reserved:
         return TaskSubmission(owner_task_id, "queued", True)
     labels = _task_labels(sync_account_task)
-    kicker = sync_account_task.kicker().with_task_id(task_id)
+    task_labels = {
+        TASK_ACCOUNT_ID_LABEL: x_user_id,
+        TASK_TRIGGER_LABEL: trigger,
+    }
+    labels.update(task_labels)
+    kicker = (
+        sync_account_task.kicker()
+        .with_task_id(task_id)
+        .with_labels(**task_labels)
+    )
     if retry_of is not None:
         labels["retry_of"] = retry_of
         kicker = kicker.with_labels(retry_of=retry_of)
@@ -544,6 +559,7 @@ async def enqueue_account_sync(
 async def enqueue_media_download(
     media_id: str,
     retry_of: str | None = None,
+    parent_task_id: str | None = None,
 ) -> TaskSubmission:
     task_id = str(uuid.uuid4())
     lock_key = _media_lock_key(media_id)
@@ -551,7 +567,15 @@ async def enqueue_media_download(
     if not reserved:
         return TaskSubmission(owner_task_id, "queued", True)
     labels = _task_labels(download_media_task)
-    kicker = download_media_task.kicker().with_task_id(task_id)
+    task_labels = {TASK_MEDIA_ID_LABEL: media_id}
+    if parent_task_id is not None:
+        task_labels[TASK_PARENT_ID_LABEL] = parent_task_id
+    labels.update(task_labels)
+    kicker = (
+        download_media_task.kicker()
+        .with_task_id(task_id)
+        .with_labels(**task_labels)
+    )
     if retry_of is not None:
         labels["retry_of"] = retry_of
         kicker = kicker.with_labels(retry_of=retry_of)
@@ -582,7 +606,7 @@ async def _enqueue_account_media(
     duplicates = 0
     for media_id in _repository().media_ids_to_download(x_user_id):
         await _extend_execution_lock(lock_key, task_id)
-        submission = await enqueue_media_download(media_id)
+        submission = await enqueue_media_download(media_id, parent_task_id=task_id)
         if submission.duplicate:
             duplicates += 1
         else:

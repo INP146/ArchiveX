@@ -22,11 +22,36 @@ export interface TaskAttempt {
   duration_ms: number | null;
 }
 
+export interface TaskContext {
+  account?: {
+    x_user_id: string;
+    username: string | null;
+    display_name: string | null;
+  };
+  post?: {
+    tweet_id: string;
+    permalink: string;
+    text_preview: string;
+  };
+  media?: {
+    id: string;
+    media_type?: string;
+    source_url?: string;
+    download_status?: string;
+  };
+  schedule?: { id: string };
+}
+
 export interface TaskRecord {
   id: string;
   name: string;
   status: TaskStatus | "unknown";
   worker: string;
+  account_x_user_id: string | null;
+  media_id: string | null;
+  parent_task_id: string | null;
+  trigger: string | null;
+  context: TaskContext;
   args: unknown[];
   kwargs: Record<string, unknown>;
   labels: Record<string, unknown>;
@@ -41,6 +66,7 @@ export interface TaskRecord {
   retry_of: string | null;
   duration_ms: number | null;
   attempts?: TaskAttempt[];
+  child_counts?: TaskCounts;
 }
 
 export interface TaskCounts {

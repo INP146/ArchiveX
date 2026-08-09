@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import secrets
@@ -284,18 +285,20 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
                 status_code=409,
                 detail="an active task cannot be rerun",
             )
-        args = task["args"] if isinstance(task["args"], list) else []
-        if task["name"] == "archivex.sync_account" and args:
+        account_id = _task_context_id(task, "account", "x_user_id")
+        media_id = _task_context_id(task, "media", "id")
+        if task["name"] == "archivex.sync_account" and account_id:
             submission = await task_dispatcher.enqueue_account_sync(
-                str(args[0]),
+                account_id,
                 "rerun",
                 task["id"],
             )
             return submission.as_dict()
-        if task["name"] == "archivex.download_media" and args:
+        if task["name"] == "archivex.download_media" and media_id:
             submission = await task_dispatcher.enqueue_media_download(
-                str(args[0]),
+                media_id,
                 task["id"],
+                task.get("parent_task_id"),
             )
             return submission.as_dict()
         raise HTTPException(status_code=422, detail="this task type cannot be rerun")
@@ -327,7 +330,8 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
             result["duplicates" if submission.duplicate else "queued"] += 1
 
         for task in task_center.list_latest_failures():
-            args = task["args"] if isinstance(task["args"], list) else []
+            account_id = _task_context_id(task, "account", "x_user_id")
+            media_id = _task_context_id(task, "media", "id")
             try:
                 if task["retry_state"] == "superseded":
                     result["skipped_resolved"] += 1
@@ -336,8 +340,8 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
                     result["automatic_retrying"] += 1
                     continue
 
-                if task["name"] == "archivex.sync_account" and args:
-                    account = repository.get_account(str(args[0]))
+                if task["name"] == "archivex.sync_account" and account_id:
+                    account = repository.get_account(account_id)
                     if account is None or not account.archive_enabled:
                         result["skipped_resolved"] += 1
                         continue
@@ -348,14 +352,15 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
                     )
                     continue
 
-                if task["name"] == "archivex.download_media" and args:
-                    media = repository.get_media_record(str(args[0]))
+                if task["name"] == "archivex.download_media" and media_id:
+                    media = repository.get_media_record(media_id)
                     if media is None or media.download_status not in {"pending", "failed"}:
                         result["skipped_resolved"] += 1
                         continue
                     submission = await task_dispatcher.enqueue_media_download(
                         media.id,
                         task["id"],
+                        task.get("parent_task_id"),
                     )
                     result["duplicates" if submission.duplicate else "queued"] += 1
                     continue
@@ -406,13 +411,14 @@ def _current_task_failures(
     for task in task_center.list_latest_failures():
         if task["retry_state"] != "ready":
             continue
-        args = task["args"] if isinstance(task["args"], list) else []
-        if task["name"] == "archivex.sync_account" and args:
-            account = repository.get_account(str(args[0]))
+        account_id = _task_context_id(task, "account", "x_user_id")
+        media_id = _task_context_id(task, "media", "id")
+        if task["name"] == "archivex.sync_account" and account_id:
+            account = repository.get_account(account_id)
             if account is None or not account.archive_enabled:
                 continue
-        elif task["name"] == "archivex.download_media" and args:
-            media = repository.get_media_record(str(args[0]))
+        elif task["name"] == "archivex.download_media" and media_id:
+            media = repository.get_media_record(media_id)
             if media is None or media.download_status not in {"pending", "failed"}:
                 continue
         elif task["name"] == "archivex.schedule_enabled_accounts":
@@ -424,6 +430,20 @@ def _current_task_failures(
     return failures
 
 
+def _task_context_id(task: dict[str, Any], subject: str, field: str) -> str | None:
+    direct_field = "account_x_user_id" if subject == "account" else "media_id"
+    direct_value = task.get(direct_field)
+    if direct_value:
+        return str(direct_value)
+    context = task.get("context")
+    if not isinstance(context, dict):
+        return None
+    value = context.get(subject)
+    if not isinstance(value, dict) or not value.get(field):
+        return None
+    return str(value[field])
+
+
 def _task_matches_query(task: dict[str, Any], query: str | None) -> bool:
     if query is None:
         return True
@@ -433,6 +453,11 @@ def _task_matches_query(task: dict[str, Any], query: str | None) -> bool:
         needle in str(task["name"]).casefold()
         or needle in str(task["worker"]).casefold()
         or compact_needle in str(task["id"]).replace("-", "").casefold()
+        or needle in str(task.get("account_x_user_id") or "").casefold()
+        or needle in str(task.get("media_id") or "").casefold()
+        or needle in json.dumps(
+            task.get("context", {}), ensure_ascii=False
+        ).casefold()
     )
 
 

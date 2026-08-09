@@ -40,9 +40,22 @@ backups/pre-database-consolidation-20260809T112618Z.tar.gz
 
 归档内含迁移时的 `archive.sqlite3` 和 `taskiq-dashboard.sqlite3`，两者均通过完整性检查。当前代码和活动数据不包含 `taskiq-dashboard` 路径、迁移标记表或自动导入逻辑。
 
-## 后续任务关联
+## 任务业务关联
 
-统一数据库为任务补充结构化目标字段和外键提供基础。后续可在 `queue_tasks` 增加 `account_x_user_id`、`media_id` 等可空字段，分别关联 `accounts` 和 `media`；不再需要解析 `args` 或做跨数据库查询来展示“同步谁”和“下载哪个媒体”。
+`queue_tasks` 已使用统一数据库建立结构化任务对象：
+
+- `account_x_user_id` 外键关联 `accounts`，表示账号同步目标，也保存媒体所属账号。
+- `media_id` 外键关联 `media`，表示媒体下载目标；帖子和账号通过 `media -> posts -> accounts` 获取。
+- `parent_task_id` 自关联产生媒体任务的同步任务。
+- `retry_of` 自关联被手动重试的旧逻辑任务，与父任务语义分离。
+- `trigger` 保存手动、定时、新增账号、重新执行等触发来源。
+- `context` 保存入队时的账号、帖子和媒体展示快照。
+
+外键用于当前业务对象的完整性和跳转，`context` 用于保留历史语义。账号改名、媒体状态变化或业务记录删除后，任务历史仍可说明入队时处理的对象。原始 `args`、`kwargs` 和 `labels` 继续用于执行排障，但不再参与任务对象识别、重跑、失败重试或任务搜索。
+
+媒体任务首次由账号同步任务派生；自动重试保持同一逻辑任务 ID。任务中心手动重跑会创建新的媒体逻辑任务，同时复制原 `parent_task_id` 并通过 `retry_of` 指向旧媒体任务。同步任务详情按 `parent_task_id` 汇总派生媒体任务状态。
+
+实施时 `queue_tasks` 和 `queue_attempts` 均为空，因此直接删除并按最终 schema 重建这两张表，没有生成迁移标记、兼容分支或临时数据，也没有改动账号、帖子、媒体和同步运行数据。
 
 ## 任务历史清理
 

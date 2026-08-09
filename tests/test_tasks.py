@@ -5,6 +5,7 @@ import sys
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ from taskiq.result import TaskiqResult
 
 from archivex.media import GalleryDlMediaDownloader, PermanentMediaDownloadError
 from archivex import tasks
+from archivex.storage import ArchiveRepository, MediaInput, PostInput, initialize_storage
 from archivex.task_center import TaskCenterRepository, _automatic_retries_exhausted
 
 
@@ -52,6 +54,15 @@ class FakeRedis:
 
     async def aclose(self):
         return None
+
+
+def task_repository(database_path: Path) -> TaskCenterRepository:
+    initialize_storage(
+        database_path,
+        database_path.parent / "archive",
+        database_path.parent / "sessions",
+    )
+    return TaskCenterRepository(database_path, 3600, "archivex:crawl")
 
 
 class FakeTask:
@@ -190,7 +201,7 @@ def test_automatic_retry_is_one_logical_task_with_distinct_attempts(
         async def add_schedule(self, schedule):
             self.schedules.append(schedule)
 
-    repository = TaskCenterRepository(tmp_path / "tasks.sqlite3", 3600, "archivex:crawl")
+    repository = task_repository(tmp_path / "archive.sqlite3")
     monkeypatch.setattr(tasks, "_task_center_repository", lambda: repository)
     source = MemoryScheduleSource()
     retry = tasks.ResilientSmartRetryMiddleware(
@@ -285,6 +296,29 @@ def test_account_enqueue_coalesces_duplicate_tasks(monkeypatch) -> None:
     assert second.duplicate is True
     assert second.task_id == first.task_id
     assert len(fake_task.calls) == 1
+    assert fake_task.labels[tasks.TASK_ACCOUNT_ID_LABEL] == "42"
+    assert fake_task.labels[tasks.TASK_TRIGGER_LABEL] == "manual"
+
+
+def test_media_enqueue_carries_parent_and_retry_relationships(monkeypatch) -> None:
+    fake_redis = FakeRedis()
+    fake_task = FakeTask()
+    parent_task_id = str(uuid.uuid4())
+    retry_of = str(uuid.uuid4())
+    monkeypatch.setattr(tasks, "_redis", lambda: fake_redis)
+    monkeypatch.setattr(tasks, "download_media_task", fake_task)
+
+    submission = asyncio.run(tasks.enqueue_media_download(
+        "media-id",
+        retry_of=retry_of,
+        parent_task_id=parent_task_id,
+    ))
+
+    assert submission.duplicate is False
+    assert fake_task.calls == [(submission.task_id, ("media-id",))]
+    assert fake_task.labels[tasks.TASK_MEDIA_ID_LABEL] == "media-id"
+    assert fake_task.labels[tasks.TASK_PARENT_ID_LABEL] == parent_task_id
+    assert fake_task.labels["retry_of"] == retry_of
 
 
 def test_execution_claim_and_extension_never_refresh_another_owner(monkeypatch) -> None:
@@ -357,7 +391,7 @@ def test_enqueue_failure_still_updates_lifecycle_when_lock_rollback_fails(
 def test_abandon_queued_task_finishes_lifecycle_record(tmp_path) -> None:
     database_path = tmp_path / "tasks.sqlite3"
     task_id = uuid.uuid4()
-    repository = TaskCenterRepository(database_path, 3600, "archivex:crawl")
+    repository = task_repository(database_path)
     repository.record_queued(
         str(task_id),
         "archivex.sync_account",
@@ -382,7 +416,7 @@ def test_abandon_queued_task_finishes_lifecycle_record(tmp_path) -> None:
 
 def test_delete_task_history_removes_only_terminal_tasks_and_attempts(tmp_path) -> None:
     database_path = tmp_path / "tasks.sqlite3"
-    repository = TaskCenterRepository(database_path, 3600, "archivex:crawl")
+    repository = task_repository(database_path)
     task_ids = {
         status: str(uuid.uuid4())
         for status in ("completed", "failure", "abandoned", "queued")
@@ -420,8 +454,98 @@ def test_delete_task_history_removes_only_terminal_tasks_and_attempts(tmp_path) 
         assert connection.execute("SELECT COUNT(*) FROM queue_attempts").fetchone()[0] == 1
 
 
+def test_task_context_links_sync_media_and_immutable_business_snapshot(tmp_path) -> None:
+    database_path = tmp_path / "archive.sqlite3"
+    lifecycle = task_repository(database_path)
+    archive = ArchiveRepository(database_path, tmp_path / "archive")
+    archive.upsert_account("42", "example", "Example")
+    archive.upsert_post(PostInput(
+        "100",
+        "42",
+        "original",
+        "A post whose media should be downloaded",
+        datetime(2026, 8, 8, tzinfo=UTC),
+        "https://x.com/example/status/100",
+        {},
+    ))
+    media_id = archive.upsert_media(MediaInput(
+        "100", "image", "https://example.test/image.jpg"
+    ))
+    parent_task_id = str(uuid.uuid4())
+    child_task_id = str(uuid.uuid4())
+    lifecycle.record_queued(
+        parent_task_id,
+        "archivex.sync_account",
+        "archivex:crawl",
+        ["42", "manual"],
+        {},
+        {
+            tasks.TASK_ACCOUNT_ID_LABEL: "42",
+            tasks.TASK_TRIGGER_LABEL: "manual",
+        },
+    )
+    lifecycle.record_queued(
+        child_task_id,
+        "archivex.download_media",
+        "archivex:media",
+        [media_id],
+        {},
+        {
+            tasks.TASK_MEDIA_ID_LABEL: media_id,
+            tasks.TASK_PARENT_ID_LABEL: parent_task_id,
+        },
+    )
+
+    child = lifecycle.get_task(child_task_id)
+    assert child is not None
+    assert child["account_x_user_id"] == "42"
+    assert child["media_id"] == media_id
+    assert child["parent_task_id"] == parent_task_id
+    assert child["context"] == {
+        "account": {
+            "x_user_id": "42",
+            "username": "example",
+            "display_name": "Example",
+        },
+        "post": {
+            "tweet_id": "100",
+            "permalink": "https://x.com/example/status/100",
+            "text_preview": "A post whose media should be downloaded",
+        },
+        "media": {
+            "id": media_id,
+            "media_type": "image",
+            "source_url": "https://example.test/image.jpg",
+            "download_status": "pending",
+        },
+    }
+    assert lifecycle.get_task(parent_task_id)["child_counts"]["queued"] == 1
+    assert lifecycle.list_tasks(query="100")["items"][0]["id"] == child_task_id
+
+    archive.observe_account_identity("42", "renamed", "Renamed")
+    assert lifecycle.get_task(child_task_id)["context"]["account"]["username"] == "example"
+
+    lifecycle.record_finished(child_task_id, {}, result=None, error="failed")
+    retry_task_id = str(uuid.uuid4())
+    lifecycle.record_queued(
+        retry_task_id,
+        "archivex.download_media",
+        "archivex:media",
+        [media_id],
+        {},
+        {
+            tasks.TASK_MEDIA_ID_LABEL: media_id,
+            tasks.TASK_PARENT_ID_LABEL: parent_task_id,
+            "retry_of": child_task_id,
+        },
+    )
+    retried = lifecycle.get_task(retry_task_id)
+    assert retried["parent_task_id"] == parent_task_id
+    assert retried["retry_of"] == child_task_id
+
+
 def test_retry_attempts_preserve_failure_history_and_reject_late_events(tmp_path) -> None:
-    repository = TaskCenterRepository(tmp_path / "tasks.sqlite3", 3600, "archivex:crawl")
+    repository = task_repository(tmp_path / "archive.sqlite3")
     task_id = str(uuid.uuid4())
     first = {"max_retries": "5"}
     second = {"max_retries": "5", "_retries": "1"}
@@ -463,7 +587,7 @@ def test_retry_attempts_preserve_failure_history_and_reject_late_events(tmp_path
 def test_terminal_events_recover_tasks_when_earlier_lifecycle_events_are_missing(
     tmp_path,
 ) -> None:
-    repository = TaskCenterRepository(tmp_path / "tasks.sqlite3", 3600, "archivex:crawl")
+    repository = task_repository(tmp_path / "archive.sqlite3")
     completed_id = str(uuid.uuid4())
     completed_labels = {"max_retries": "5", "_retries": "2"}
 
@@ -525,7 +649,7 @@ def test_terminal_events_recover_tasks_when_earlier_lifecycle_events_are_missing
 def test_lifecycle_middleware_records_attempts_and_discards_consumed_schedule(
     tmp_path, monkeypatch,
 ) -> None:
-    repository = TaskCenterRepository(tmp_path / "tasks.sqlite3", 3600, "archivex:crawl")
+    repository = task_repository(tmp_path / "archive.sqlite3")
     monkeypatch.setattr(tasks, "_task_center_repository", lambda: repository)
     middleware = tasks.TaskLifecycleMiddleware()
     message = TaskiqMessage(

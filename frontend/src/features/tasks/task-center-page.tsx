@@ -10,12 +10,16 @@ import {
   FiChevronLeft,
   FiChevronRight,
   FiClock,
+  FiExternalLink,
+  FiGitBranch,
+  FiImage,
   FiInbox,
   FiPlay,
   FiRefreshCw,
   FiSearch,
   FiServer,
-  FiTrash2
+  FiTrash2,
+  FiUser
 } from "react-icons/fi";
 
 import {
@@ -353,7 +357,7 @@ function TaskRow({ task }: { task: TaskRecord }) {
   const status = STATUS_META[task.status] ?? STATUS_META.unknown;
   return (
     <Link to="/tasks/$taskId" params={{ taskId: task.id }} className="x-task-row">
-      <span className="x-task-name"><strong>{taskLabel(task.name)}</strong><small>{shortId(task.id)}</small></span>
+      <span className="x-task-name"><strong>{taskLabel(task.name)}</strong><small>{taskSummary(task)}</small></span>
       <span><StatusBadge taskStatus={task.status} /></span>
       <span className="x-task-queue">{queueLabel(task.worker)}</span>
       <span className="x-task-duration">{formatDuration(task.duration_ms)}</span>
@@ -371,11 +375,17 @@ function TaskDetail({ task }: { task: TaskRecord }) {
         <div><h2>{taskLabel(task.name)}</h2><code>{task.name}</code></div>
         <StatusBadge taskStatus={task.status} />
       </section>
+      <TaskSubject task={task} />
       <dl className="x-task-facts">
         <div><dt>任务 ID</dt><dd><code>{task.id}</code></dd></div>
         <div><dt>执行队列</dt><dd>{queueLabel(task.worker)}</dd></div>
         <div><dt>当前尝试</dt><dd>{task.current_attempt} / {task.max_attempts}</dd></div>
+        {task.trigger && <div><dt>触发方式</dt><dd>{triggerLabel(task.trigger)}</dd></div>}
+        {task.parent_task_id && <div><dt>所属同步任务</dt><dd><Link to="/tasks/$taskId" params={{ taskId: task.parent_task_id }}><code>{task.parent_task_id}</code></Link></dd></div>}
         {task.retry_of && <div><dt>重试来源</dt><dd><Link to="/tasks/$taskId" params={{ taskId: task.retry_of }}><code>{task.retry_of}</code></Link></dd></div>}
+        {task.child_counts && task.child_counts.all > 0 && (
+          <div><dt>派生媒体任务</dt><dd>{childCountSummary(task.child_counts)}</dd></div>
+        )}
         <div><dt>进入队列</dt><dd>{formatDate(task.queued_at, true)}</dd></div>
         <div><dt>开始时间</dt><dd>{formatDate(task.started_at, true)}</dd></div>
         <div><dt>完成时间</dt><dd>{formatDate(task.finished_at, true)}</dd></div>
@@ -406,6 +416,45 @@ function TaskDetail({ task }: { task: TaskRecord }) {
   );
 }
 
+function TaskSubject({ task }: { task: TaskRecord }) {
+  const { account, media, post } = task.context;
+  if (!account && !media) return null;
+
+  return (
+    <section className="x-task-subject">
+      <span className="x-task-subject-icon">{media ? <FiImage /> : <FiUser />}</span>
+      <div className="x-task-subject-main">
+        <span>{media ? mediaTypeLabel(media.media_type) : "同步账号"}</span>
+        {account && (
+          <Link to="/accounts/$xUserId" params={{ xUserId: account.x_user_id }}>
+            <strong>{account.display_name || account.username || account.x_user_id}</strong>
+            {account.username && <small>@{account.username}</small>}
+          </Link>
+        )}
+        {media && <code>{media.id}</code>}
+      </div>
+      <div className="x-task-subject-links">
+        {post && (
+          <a href={post.permalink} target="_blank" rel="noreferrer">
+            <FiExternalLink /><span>帖子 {post.tweet_id}</span>
+          </a>
+        )}
+        {media?.source_url && (
+          <a href={media.source_url} target="_blank" rel="noreferrer">
+            <FiExternalLink /><span>媒体源</span>
+          </a>
+        )}
+        {task.parent_task_id && (
+          <Link to="/tasks/$taskId" params={{ taskId: task.parent_task_id }}>
+            <FiGitBranch /><span>同步任务</span>
+          </Link>
+        )}
+      </div>
+      {post?.text_preview && <p>{post.text_preview}</p>}
+    </section>
+  );
+}
+
 function DetailBlock({ title, value, error = false }: { title: string; value: unknown; error?: boolean }) {
   return (
     <section className={`x-task-detail-block ${error ? "is-error" : ""}`}>
@@ -425,6 +474,40 @@ function TaskState({ message, error = false }: { message: string; error?: boolea
 }
 
 function taskLabel(name: string) { return TASK_NAMES[name] ?? name; }
+function taskSummary(task: TaskRecord) {
+  const { account, media, post } = task.context;
+  const accountLabel = account?.username ? `@${account.username}` : account?.display_name || account?.x_user_id;
+  if (media) {
+    return [mediaTypeLabel(media.media_type), post ? `帖子 ${post.tweet_id}` : null, accountLabel]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  if (accountLabel) return [accountLabel, account?.x_user_id].filter((value, index, values) => value && values.indexOf(value) === index).join(" · ");
+  return shortId(task.id);
+}
+function mediaTypeLabel(mediaType?: string) {
+  if (mediaType === "image") return "图片下载";
+  if (mediaType === "video") return "视频下载";
+  if (mediaType === "gif") return "动图下载";
+  return "媒体下载";
+}
+function triggerLabel(trigger: string) {
+  const labels: Record<string, string> = {
+    manual: "手动同步",
+    account_added: "新增账号",
+    scheduled: "定时同步",
+    schedule_manual: "手动运行计划",
+    rerun: "重新执行",
+    failure_retry: "失败重试"
+  };
+  return labels[trigger] ?? trigger;
+}
+function childCountSummary(counts: { all: number; completed: number; failure: number; in_progress: number; queued: number; retry_scheduled: number; abandoned: number }) {
+  const active = counts.in_progress + counts.queued + counts.retry_scheduled;
+  return [`共 ${counts.all} 条`, `完成 ${counts.completed}`, active ? `进行中 ${active}` : null, counts.failure ? `失败 ${counts.failure}` : null, counts.abandoned ? `中断 ${counts.abandoned}` : null]
+    .filter(Boolean)
+    .join(" · ");
+}
 function canRerunTask(task: TaskRecord) {
   const rerunnable = task.name === "archivex.sync_account" || task.name === "archivex.download_media";
   return rerunnable && !["queued", "in_progress", "retry_scheduled"].includes(task.status);

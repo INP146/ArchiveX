@@ -8,8 +8,14 @@ from archivex.config import Settings
 from archivex.main import create_app
 from archivex.session import SessionAccountSummary
 from archivex.source import SourceAccount, SourcePost
-from archivex.storage import ArchiveRepository, MediaInput, PostInput
-from archivex.task_center import TaskCenterRepository
+from archivex.storage import ArchiveRepository, MediaInput, PostInput, initialize_storage
+from archivex.task_center import (
+    TASK_ACCOUNT_ID_LABEL,
+    TASK_MEDIA_ID_LABEL,
+    TASK_PARENT_ID_LABEL,
+    TASK_TRIGGER_LABEL,
+    TaskCenterRepository,
+)
 from archivex.task_dispatcher import TaskSubmission
 
 
@@ -60,8 +66,10 @@ class FakeTaskDispatcher:
         self.calls.append((x_user_id, trigger, retry_of))
         return TaskSubmission("task-123", "queued", False)
 
-    async def enqueue_media_download(self, media_id, retry_of=None):
-        self.media_calls.append((media_id, retry_of))
+    async def enqueue_media_download(
+        self, media_id, retry_of=None, parent_task_id=None
+    ):
+        self.media_calls.append((media_id, retry_of, parent_task_id))
         return TaskSubmission("media-task-123", "queued", False)
 
 
@@ -367,6 +375,17 @@ def test_manual_sync_enqueues_without_waiting_for_the_source(tmp_path) -> None:
 def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
     settings = _settings(tmp_path)
     task_id = str(uuid.uuid4())
+    initialize_storage(
+        settings.archive_db_path,
+        settings.archive_data_dir,
+        settings.twscrape_session_path,
+    )
+    repository = ArchiveRepository(settings.archive_db_path, settings.archive_data_dir)
+    repository.upsert_account("42", "example", "Example")
+    root_labels = {
+        TASK_ACCOUNT_ID_LABEL: "42",
+        TASK_TRIGGER_LABEL: "manual",
+    }
     lifecycle = TaskCenterRepository(
         settings.archive_db_path,
         settings.archive_sync_interval_seconds,
@@ -378,7 +397,7 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
         "archivex:crawl",
         ["42", "manual"],
         {},
-        {},
+        root_labels,
         "2026-08-08T12:00:00Z",
     )
     lifecycle.record_started(
@@ -387,12 +406,12 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
         "archivex:crawl",
         ["42", "manual"],
         {},
-        {},
+        root_labels,
         "2026-08-08T12:00:01Z",
     )
     lifecycle.record_finished(
         task_id,
-        {},
+        root_labels,
         result=None,
         error="network unavailable",
         finished_at="2026-08-08T12:00:03Z",
@@ -409,7 +428,6 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
         dispatcher,
     )) as client:
         repository = ArchiveRepository(settings.archive_db_path, settings.archive_data_dir)
-        repository.upsert_account("42", "example")
         headers = {"Authorization": "Bearer test-token"}
 
         tasks = client.get("/api/task-center/tasks?status=failure", headers=headers)
@@ -417,10 +435,18 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
         assert tasks.json()["total"] == 1
         assert tasks.json()["items"][0]["id"] == task_id
         assert tasks.json()["items"][0]["duration_ms"] == 2000
+        assert tasks.json()["items"][0]["account_x_user_id"] == "42"
+        assert tasks.json()["items"][0]["trigger"] == "manual"
+        assert tasks.json()["items"][0]["context"]["account"]["username"] == "example"
 
         searched = client.get(f"/api/task-center/tasks?q={task_id}", headers=headers)
         assert searched.status_code == 200
         assert searched.json()["total"] == 1
+        searched_account = client.get(
+            "/api/task-center/tasks?q=example", headers=headers
+        )
+        assert searched_account.status_code == 200
+        assert searched_account.json()["items"][0]["id"] == task_id
 
         detail = client.get(f"/api/task-center/tasks/{task_id}", headers=headers)
         assert detail.status_code == 200
@@ -493,6 +519,47 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
             "100", "image", "https://example.test/completed.jpg",
             download_status="completed",
         ))
+        linked_media_task_id = str(uuid.uuid4())
+        linked_media_labels = {
+            TASK_MEDIA_ID_LABEL: pending_media_id,
+            TASK_PARENT_ID_LABEL: task_id,
+        }
+        lifecycle.record_queued(
+            linked_media_task_id,
+            "archivex.download_media",
+            "archivex:media",
+            [pending_media_id],
+            {},
+            linked_media_labels,
+            "2026-08-08T12:30:00Z",
+        )
+        lifecycle.record_finished(
+            linked_media_task_id,
+            linked_media_labels,
+            result={"status": "completed"},
+            error=None,
+            finished_at="2026-08-08T12:30:02Z",
+            name="archivex.download_media",
+            worker="archivex:media",
+            args=[pending_media_id],
+        )
+        linked_detail = client.get(
+            f"/api/task-center/tasks/{linked_media_task_id}", headers=headers
+        )
+        assert linked_detail.status_code == 200
+        assert linked_detail.json()["parent_task_id"] == task_id
+        assert linked_detail.json()["context"]["account"]["username"] == "example"
+        assert linked_detail.json()["context"]["post"]["tweet_id"] == "100"
+        assert linked_detail.json()["context"]["media"]["id"] == pending_media_id
+        linked_rerun = client.post(
+            f"/api/task-center/tasks/{linked_media_task_id}/rerun", headers=headers
+        )
+        assert linked_rerun.status_code == 202
+        assert dispatcher.media_calls[0] == (
+            pending_media_id,
+            linked_media_task_id,
+            task_id,
+        )
         repository.upsert_account("85", "retrying")
         for name, args, task_status, labels, started_at in [
                 ("archivex.sync_account", ["42", "older"], 2, {}, "2026-08-08 11:00:00"),
@@ -508,17 +575,25 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
                 ("archivex.unknown_task", ["target"], 2, {}, "2026-08-08 13:03:00"),
             ]:
             item_id = str(uuid.uuid4())
+            task_labels = dict(labels)
+            if name == "archivex.sync_account":
+                task_labels.update({
+                    TASK_ACCOUNT_ID_LABEL: str(args[0]),
+                    TASK_TRIGGER_LABEL: str(args[1]),
+                })
+            elif name == "archivex.download_media":
+                task_labels[TASK_MEDIA_ID_LABEL] = str(args[0])
             lifecycle.record_queued(
-                item_id, name, "archivex:crawl", args, {}, labels,
+                item_id, name, "archivex:crawl", args, {}, task_labels,
                 started_at.replace(" ", "T") + "Z",
             )
             lifecycle.record_started(
-                item_id, name, "archivex:crawl", args, {}, labels,
+                item_id, name, "archivex:crawl", args, {}, task_labels,
                 started_at.replace(" ", "T") + "Z",
             )
             lifecycle.record_finished(
                 item_id,
-                labels,
+                task_labels,
                 result=None,
                 error="failed" if task_status == 2 else None,
                 finished_at=started_at.replace(" ", "T") + "Z",
@@ -565,5 +640,6 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
     assert dispatcher.calls[4][2] is not None
     assert dispatcher.calls[5][0:2] == ("42", "failure_retry")
     assert dispatcher.calls[5][2] is not None
-    assert dispatcher.media_calls[0][0] == pending_media_id
-    assert dispatcher.media_calls[0][1] is not None
+    assert dispatcher.media_calls[1][0] == pending_media_id
+    assert dispatcher.media_calls[1][1] is not None
+    assert dispatcher.media_calls[1][2] is None

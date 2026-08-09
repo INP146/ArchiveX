@@ -29,6 +29,7 @@ class SyncTaskDispatcher(Protocol):
         self,
         media_id: str,
         retry_of: str | None = None,
+        parent_task_id: str | None = None,
     ) -> TaskSubmission: ...
 
 
@@ -55,6 +56,7 @@ class InlineSyncTaskDispatcher:
         self,
         media_id: str,
         retry_of: str | None = None,
+        parent_task_id: str | None = None,
     ) -> TaskSubmission:
         media = self.service.repository.get_media_record(media_id)
         if media is None:
@@ -95,7 +97,8 @@ class TaskiqSyncTaskDispatcher:
         self,
         media_id: str,
         retry_of: str | None = None,
+        parent_task_id: str | None = None,
     ) -> TaskSubmission:
         from archivex.tasks import enqueue_media_download
 
-        return await enqueue_media_download(media_id, retry_of)
+        return await enqueue_media_download(media_id, retry_of, parent_task_id)
