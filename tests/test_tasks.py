@@ -584,6 +584,26 @@ def test_retry_attempts_preserve_failure_history_and_reject_late_events(tmp_path
     assert task["attempts"][1]["error"] == "first failure"
 
 
+def test_task_reads_hold_one_snapshot_across_concurrent_writes(tmp_path) -> None:
+    repository = task_repository(tmp_path / "archive.sqlite3")
+    first_task_id = str(uuid.uuid4())
+    second_task_id = str(uuid.uuid4())
+    repository.record_queued(
+        first_task_id, "archivex.sync_account", "archivex:crawl", [], {}, {}
+    )
+
+    with repository._read() as connection:
+        before = connection.execute("SELECT COUNT(*) FROM queue_tasks").fetchone()[0]
+        repository.record_queued(
+            second_task_id, "archivex.sync_account", "archivex:crawl", [], {}, {}
+        )
+        during = connection.execute("SELECT COUNT(*) FROM queue_tasks").fetchone()[0]
+
+    assert before == 1
+    assert during == 1
+    assert repository.get_summary()["counts"]["all"] == 2
+
+
 def test_terminal_events_recover_tasks_when_earlier_lifecycle_events_are_missing(
     tmp_path,
 ) -> None:

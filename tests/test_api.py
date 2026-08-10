@@ -439,6 +439,19 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
         assert tasks.json()["items"][0]["trigger"] == "manual"
         assert tasks.json()["items"][0]["context"]["account"]["username"] == "example"
 
+        summary = client.get("/api/task-center/summary", headers=headers)
+        assert summary.status_code == 200
+        assert summary.json()["counts"] == {
+            "all": 1,
+            "queued": 0,
+            "in_progress": 0,
+            "retry_scheduled": 0,
+            "completed": 0,
+            "failure": 1,
+            "abandoned": 0,
+        }
+        assert datetime.fromisoformat(summary.json()["generated_at"]).tzinfo is not None
+
         searched = client.get(f"/api/task-center/tasks?q={task_id}", headers=headers)
         assert searched.status_code == 200
         assert searched.json()["total"] == 1

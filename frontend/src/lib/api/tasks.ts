@@ -85,6 +85,11 @@ export interface TaskListResponse {
   counts: TaskCounts;
 }
 
+export interface TaskSummary {
+  counts: TaskCounts;
+  generated_at: string;
+}
+
 export interface TaskSchedule {
   id: string;
   name: string;
@@ -120,6 +125,10 @@ export function getTasks(query: string, status: TaskStatus | null, offset = 0, l
 
 export function getTask(taskId: string) {
   return apiFetch<TaskRecord>(`/api/task-center/tasks/${taskId}`);
+}
+
+export function getTaskSummary() {
+  return apiFetch<TaskSummary>("/api/task-center/summary");
 }
 
 export function rerunTask(taskId: string) {

@@ -515,6 +515,26 @@ class TaskCenterRepository:
             "counts": counts,
         }
 
+    def get_summary(self) -> dict[str, Any]:
+        try:
+            with self._read() as connection:
+                count_rows = connection.execute(
+                    "SELECT status, COUNT(*) AS count FROM queue_tasks GROUP BY status"
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return {
+                "counts": self._empty_counts(),
+                "generated_at": datetime.now(UTC).isoformat(),
+            }
+
+        counts = self._empty_counts()
+        for row in count_rows:
+            name = str(row["status"])
+            if name in counts:
+                counts[name] = int(row["count"])
+                counts["all"] += int(row["count"])
+        return {"counts": counts, "generated_at": datetime.now(UTC).isoformat()}
+
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         normalized_id = _optional_task_id(task_id)
         if normalized_id is None:
@@ -778,7 +798,12 @@ class TaskCenterRepository:
         )
         connection.row_factory = sqlite3.Row
         try:
+            connection.execute("BEGIN")
             yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
         finally:
             connection.close()
 

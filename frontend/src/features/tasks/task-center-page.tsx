@@ -29,6 +29,7 @@ import {
   clearTaskHistory,
   getTask,
   getTaskSchedules,
+  getTaskSummary,
   getTasks,
   rerunTask,
   retryFailedTasks,
@@ -58,10 +59,18 @@ export function TaskListPage() {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<TaskStatus | null>(null);
   const [page, setPage] = useState(0);
+  const summary = useQuery({
+    queryKey: ["task-center", "summary"],
+    queryFn: getTaskSummary,
+    refetchInterval: 2_000,
+    staleTime: 0
+  });
   const tasks = useQuery({
-    queryKey: ["task-center", query, status, page],
+    queryKey: ["task-center", "list", query, status, page],
     queryFn: () => getTasks(query, status, page * pageSize, pageSize),
-    refetchInterval: 5_000
+    refetchInterval: 2_000,
+    staleTime: 0,
+    gcTime: 0
   });
   const retryFailures = useMutation({
     mutationFn: retryFailedTasks,
@@ -86,8 +95,8 @@ export function TaskListPage() {
   const historyStatus = terminalTaskStatus(status);
   const canClearHistory = status === null || historyStatus !== undefined;
   const historyCount = status === null
-    ? terminalTaskCount(tasks.data?.counts)
-    : (tasks.data?.counts[status] ?? 0);
+    ? terminalTaskCount(summary.data?.counts)
+    : (summary.data?.counts[status] ?? 0);
   const historyLabel = status === null
     ? "已结束记录"
     : `${STATUS_META[status]?.label ?? "任务"}记录`;
@@ -108,16 +117,21 @@ export function TaskListPage() {
 
   return (
     <div className="x-task-page">
-      <TaskHeader title="任务中心" refreshing={tasks.isFetching} onRefresh={() => void tasks.refetch()} />
+      <TaskHeader
+        title="任务中心"
+        refreshing={tasks.isFetching || summary.isFetching}
+        onRefresh={() => void Promise.all([tasks.refetch(), summary.refetch()])}
+      />
       <TaskNavigation active="tasks" />
 
       <section className="x-task-metrics" aria-label="队列状态概览">
-        <Metric icon={<FiActivity />} label="运行中" value={tasks.data?.counts.in_progress} tone="running" active={status === "in_progress"} onClick={() => selectStatus("in_progress")} />
-        <Metric icon={<FiInbox />} label="等待中" value={tasks.data?.counts.queued} tone="queued" active={status === "queued"} onClick={() => selectStatus("queued")} />
-        <Metric icon={<FiClock />} label="等待重试" value={tasks.data?.counts.retry_scheduled} tone="retrying" active={status === "retry_scheduled"} onClick={() => selectStatus("retry_scheduled")} />
-        <Metric icon={<FiCheckCircle />} label="已完成" value={tasks.data?.counts.completed} tone="completed" active={status === "completed"} onClick={() => selectStatus("completed")} />
-        <Metric icon={<FiAlertCircle />} label="异常" value={tasks.data?.counts.failure} tone="failure" active={status === "failure"} onClick={() => selectStatus("failure")} />
+        <Metric icon={<FiActivity />} label="运行中" value={summary.data?.counts.in_progress} tone="running" active={status === "in_progress"} onClick={() => selectStatus("in_progress")} />
+        <Metric icon={<FiInbox />} label="等待中" value={summary.data?.counts.queued} tone="queued" active={status === "queued"} onClick={() => selectStatus("queued")} />
+        <Metric icon={<FiClock />} label="等待重试" value={summary.data?.counts.retry_scheduled} tone="retrying" active={status === "retry_scheduled"} onClick={() => selectStatus("retry_scheduled")} />
+        <Metric icon={<FiCheckCircle />} label="已完成" value={summary.data?.counts.completed} tone="completed" active={status === "completed"} onClick={() => selectStatus("completed")} />
+        <Metric icon={<FiAlertCircle />} label="异常" value={summary.data?.counts.failure} tone="failure" active={status === "failure"} onClick={() => selectStatus("failure")} />
       </section>
+      {summary.error && <div className="x-task-action-error">{summary.error.message}</div>}
 
       <section className="x-task-controls">
         <label className="x-task-search">
@@ -146,7 +160,7 @@ export function TaskListPage() {
       {status === "failure" && (
         <section className="x-task-failure-action" aria-live="polite">
           <div>
-            <strong>{tasks.data?.counts.failure ?? 0} 条失败记录</strong>
+            <strong>{summary.data?.counts.failure ?? 0} 条失败记录</strong>
           </div>
           <div className="x-task-action-buttons">
             <button
@@ -161,7 +175,7 @@ export function TaskListPage() {
             <button
               type="button"
               className="x-task-command"
-              disabled={retryFailures.isPending || (tasks.data?.counts.failure ?? 0) === 0}
+              disabled={retryFailures.isPending || (summary.data?.counts.failure ?? 0) === 0}
               onClick={() => retryFailures.mutate()}
             >
               <FiRefreshCw className={retryFailures.isPending ? "is-spinning" : ""} />

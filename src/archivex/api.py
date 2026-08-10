@@ -259,6 +259,14 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
         response["counts"]["failure"] = len(current_failures)
         return response
 
+    @router.get("/task-center/summary")
+    def get_task_summary() -> dict[str, Any]:
+        response = task_center.get_summary()
+        response["counts"]["failure"] = len(
+            _current_task_failures(task_center, repository)
+        )
+        return response
+
     @router.delete("/task-center/tasks/history")
     def delete_task_history(
         task_status: Literal["completed", "failure", "abandoned"] | None = Query(
