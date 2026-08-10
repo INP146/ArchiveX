@@ -490,7 +490,24 @@ class TaskCenterRepository:
             with self._read() as connection:
                 rows = connection.execute(
                     f"""SELECT * FROM queue_tasks{where}
-                    ORDER BY COALESCE(started_at, queued_at, created_at) DESC, id DESC
+                    ORDER BY
+                        CASE status
+                            WHEN 'in_progress' THEN 0
+                            WHEN 'queued' THEN 1
+                            WHEN 'retry_scheduled' THEN 2
+                            ELSE 3
+                        END,
+                        CASE status
+                            WHEN 'in_progress' THEN COALESCE(started_at, queued_at, created_at)
+                            WHEN 'queued' THEN COALESCE(queued_at, created_at)
+                            WHEN 'retry_scheduled' THEN COALESCE(
+                                next_retry_at, finished_at, queued_at, created_at
+                            )
+                        END ASC,
+                        CASE WHEN status IN ('completed', 'failure', 'abandoned')
+                            THEN COALESCE(finished_at, started_at, queued_at, created_at)
+                        END DESC,
+                        id ASC
                     LIMIT ? OFFSET ?""",
                     (*parameters, limit, offset),
                 ).fetchall()

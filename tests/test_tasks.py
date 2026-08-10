@@ -604,6 +604,61 @@ def test_task_reads_hold_one_snapshot_across_concurrent_writes(tmp_path) -> None
     assert repository.get_summary()["counts"]["all"] == 2
 
 
+def test_task_list_prioritizes_active_tasks_in_execution_order(tmp_path) -> None:
+    repository = task_repository(tmp_path / "archive.sqlite3")
+    task_ids = {name: str(uuid.uuid4()) for name in (
+        "running_first",
+        "running_second",
+        "queued_first",
+        "queued_second",
+        "retrying",
+        "completed",
+    )}
+
+    repository.record_queued(
+        task_ids["completed"], "completed", "archivex:crawl", [], {}, {},
+        "2026-08-08T12:05:00Z",
+    )
+    repository.record_finished(
+        task_ids["completed"], {}, result=None, error=None,
+        finished_at="2026-08-08T12:06:00Z", name="completed",
+    )
+    repository.record_queued(
+        task_ids["queued_second"], "queued_second", "archivex:crawl", [], {}, {},
+        "2026-08-08T12:04:00Z",
+    )
+    repository.record_queued(
+        task_ids["queued_first"], "queued_first", "archivex:crawl", [], {}, {},
+        "2026-08-08T12:03:00Z",
+    )
+    repository.record_retry_scheduled(
+        task_ids["retrying"], {}, "temporary failure", "2026-08-08T12:10:00Z",
+        finished_at="2026-08-08T12:02:30Z", name="retrying",
+    )
+    for name, started_at in (
+        ("running_second", "2026-08-08T12:02:00Z"),
+        ("running_first", "2026-08-08T12:01:00Z"),
+    ):
+        repository.record_queued(
+            task_ids[name], name, "archivex:crawl", [], {}, {},
+            "2026-08-08T12:00:00Z",
+        )
+        repository.record_started(
+            task_ids[name], name, "archivex:crawl", [], {}, {}, started_at,
+        )
+
+    items = repository.list_tasks()["items"]
+
+    assert [item["name"] for item in items] == [
+        "running_first",
+        "running_second",
+        "queued_first",
+        "queued_second",
+        "retrying",
+        "completed",
+    ]
+
+
 def test_terminal_events_recover_tasks_when_earlier_lifecycle_events_are_missing(
     tmp_path,
 ) -> None:
