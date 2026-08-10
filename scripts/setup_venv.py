@@ -88,7 +88,7 @@ def main() -> int:
         print(f"Setup failed: {exc}", file=sys.stderr)
         return 1
 
-    print("Setup complete. Start ArchiveX with: python3 scripts/start_backend.py")
+    print("Setup complete. Start ArchiveX with: python3 scripts/dev.py")
     return 0
 
 

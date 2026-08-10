@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Start the complete ArchiveX local development stack."""
+"""Start the ArchiveX backend development processes."""
 
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -35,15 +34,13 @@ def project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def validate_project(root: Path) -> tuple[Path, str]:
+def validate_project(root: Path) -> Path:
     venv_bin = root / ".venv" / "bin"
     required_paths = (
         root / ".env",
         venv_bin / "python",
         venv_bin / "archivex",
         venv_bin / "taskiq",
-        root / "frontend" / "package.json",
-        root / "frontend" / "node_modules",
     )
     missing = [path for path in required_paths if not path.exists()]
     if missing:
@@ -53,10 +50,7 @@ def validate_project(root: Path) -> tuple[Path, str]:
             "Run scripts/setup_venv.py first."
         )
 
-    npm = shutil.which("npm")
-    if npm is None:
-        raise RuntimeError("npm was not found. Install Node.js and run scripts/setup_venv.py.")
-    return venv_bin, npm
+    return venv_bin
 
 
 def find_existing_queue_processes(root: Path) -> list[ExistingProcess]:
@@ -87,7 +81,7 @@ def find_existing_queue_processes(root: Path) -> list[ExistingProcess]:
     return existing
 
 
-def build_process_specs(root: Path, venv_bin: Path, npm: str) -> tuple[ProcessSpec, ...]:
+def build_process_specs(root: Path, venv_bin: Path) -> tuple[ProcessSpec, ...]:
     taskiq = str(venv_bin / "taskiq")
     worker_base = ("worker", "archivex.tasks:broker", "--workers", "1")
     return (
@@ -127,11 +121,6 @@ def build_process_specs(root: Path, venv_bin: Path, npm: str) -> tuple[ProcessSp
             (taskiq, "scheduler", "archivex.tasks:scheduler"),
             root,
             {"TASK_WORKER_QUEUE_NAME": "archivex:crawl"},
-        ),
-        ProcessSpec(
-            "web",
-            (npm, "run", "dev", "--", "--host", "--strictPort"),
-            root / "frontend",
         ),
     )
 
@@ -233,14 +222,14 @@ def stop_processes(processes: list[tuple[ProcessSpec, subprocess.Popen]]) -> Non
             signal_process(process, signal.SIGKILL)
 
 
-def main() -> int:
-    root = project_root()
-    try:
-        venv_bin, npm = validate_project(root)
-    except RuntimeError as exc:
-        print(exc, file=sys.stderr)
-        return 1
-
+def run_process_specs(
+    root: Path,
+    venv_bin: Path,
+    specs: tuple[ProcessSpec, ...],
+    *,
+    ready_url: str | None = None,
+    stack_label: str = "backend",
+) -> int:
     try:
         existing = find_existing_queue_processes(root)
     except subprocess.SubprocessError as exc:
@@ -270,7 +259,6 @@ def main() -> int:
         print("Start the host Redis configured by TASK_REDIS_URL, then try again.", file=sys.stderr)
         return 1
 
-    specs = build_process_specs(root, venv_bin, npm)
     processes: list[tuple[ProcessSpec, subprocess.Popen]] = []
     requested_signal: int | None = None
 
@@ -301,10 +289,8 @@ def main() -> int:
                 process = start_process(spec, base_env)
                 processes.append((spec, process))
 
-            print(
-                "ArchiveX local development stack is ready at http://localhost:5173",
-                flush=True,
-            )
+            resolved_ready_url = ready_url or f"http://localhost:{runtime['web_port']}"
+            print(f"ArchiveX {stack_label} is ready at {resolved_ready_url}", flush=True)
             while requested_signal is None:
                 stopped = next(
                     (
@@ -324,11 +310,11 @@ def main() -> int:
                     break
                 time.sleep(0.25)
     except (OSError, subprocess.SubprocessError) as exc:
-        print(f"Could not start the local stack: {exc}", file=sys.stderr)
+        print(f"Could not start the ArchiveX {stack_label}: {exc}", file=sys.stderr)
         exit_code = 1
     finally:
         if processes:
-            print("Stopping ArchiveX development processes...", flush=True)
+            print(f"Stopping ArchiveX {stack_label} processes...", flush=True)
             stop_processes(processes)
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
@@ -336,6 +322,18 @@ def main() -> int:
     if requested_signal is not None:
         return 128 + requested_signal
     return exit_code
+
+
+def main() -> int:
+    root = project_root()
+    try:
+        venv_bin = validate_project(root)
+    except RuntimeError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    specs = build_process_specs(root, venv_bin)
+    return run_process_specs(root, venv_bin, specs)
 
 
 if __name__ == "__main__":

@@ -15,18 +15,22 @@ state is owned by twscrape.
 
 ```sh
 python3 scripts/setup_venv.py
-python3 scripts/start_backend.py
+python3 scripts/dev.py
 ```
 
 The setup script creates `.env` from `.env.example` only when it is missing,
 updates the editable Python development dependencies, and installs the locked
 frontend dependencies. It never overwrites an existing `.env`.
 
-The start script checks the host Redis instance configured by `TASK_REDIS_URL`
-(the default is `redis://127.0.0.1:6379/0`), then starts the API, crawl worker,
-media worker, single scheduler, and Vite frontend. Open
+The development script checks the host Redis instance configured by
+`TASK_REDIS_URL` (the default is `redis://127.0.0.1:6379/0`), then starts the
+API, crawl worker, media worker, single scheduler, and Vite frontend. Open
 `http://localhost:5173`. Press `Ctrl+C` to stop only those five development
 processes; the host Redis process is not managed by this script.
+
+For backend-only development, run `python3 scripts/start_backend.py`. It starts
+the API, both workers, and the scheduler without checking or starting the
+frontend. The API address defaults to `http://localhost:8000`.
 
 ## Docker Compose deployment
 
@@ -130,9 +134,9 @@ The API no longer starts an in-process periodic synchronization loop.
 ## Web frontend
 
 The React frontend lives in `frontend/`. It uses Vite, TypeScript, TanStack
-Router, TanStack Query, and Tailwind CSS. The local start script launches it
-with the rest of the development stack. To run it separately for frontend-only
-work, use:
+Router, TanStack Query, and Tailwind CSS. The `scripts/dev.py` entry point
+launches it with the backend development processes. To run it separately for
+frontend-only work, use:
 
 ```sh
 cd frontend
