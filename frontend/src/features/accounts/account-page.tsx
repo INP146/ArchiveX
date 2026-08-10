@@ -28,14 +28,10 @@ import "./account-page.css";
 export function AccountPage() {
   const { xUserId } = useParams({ from: "/accounts/$xUserId" });
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<AccountTimelineTab>(() => (
-    window.location.hash === "#media" ? "media" : "posts"
-  ));
+  const [activeTab, setActiveTab] = useState<AccountTimelineTab>(() => tabFromHash());
   const [failedBannerUrl, setFailedBannerUrl] = useState<string | null>(null);
   useEffect(() => {
-    const syncTabFromHash = () => setActiveTab(
-      window.location.hash === "#media" ? "media" : "posts"
-    );
+    const syncTabFromHash = () => setActiveTab(tabFromHash());
     window.addEventListener("hashchange", syncTabFromHash);
     return () => window.removeEventListener("hashchange", syncTabFromHash);
   }, []);
@@ -62,6 +58,12 @@ export function AccountPage() {
       await queryClient.invalidateQueries();
     }
   });
+
+  function selectTab(tab: AccountTimelineTab) {
+    setActiveTab(tab);
+    const nextHash = tab === "posts" ? "" : `#${tab}`;
+    if (window.location.hash !== nextHash) window.location.hash = nextHash;
+  }
 
   if (account.isPending) return <PageState message="正在读取账号归档..." />;
   if (account.error) return <PageError error={account.error} />;
@@ -176,9 +178,9 @@ export function AccountPage() {
       </section>
 
       <nav className="x-tabs" aria-label="账号内容">
-        <TabButton active={activeTab === "posts"} onClick={() => setActiveTab("posts")}>帖子</TabButton>
-        <TabButton active={activeTab === "replies"} onClick={() => setActiveTab("replies")}>回复</TabButton>
-        <TabButton active={activeTab === "media"} onClick={() => setActiveTab("media")}>媒体</TabButton>
+        <TabButton active={activeTab === "posts"} onClick={() => selectTab("posts")}>帖子</TabButton>
+        <TabButton active={activeTab === "replies"} onClick={() => selectTab("replies")}>回复</TabButton>
+        <TabButton active={activeTab === "media"} onClick={() => selectTab("media")}>媒体</TabButton>
       </nav>
 
       <PostTimeline xUserId={xUserId} tab={activeTab} />
@@ -217,4 +219,10 @@ function formatJoined(value: string) {
     year: "numeric",
     month: "long"
   }).format(new Date(value));
+}
+
+function tabFromHash(): AccountTimelineTab {
+  if (window.location.hash === "#media") return "media";
+  if (window.location.hash === "#replies") return "replies";
+  return "posts";
 }

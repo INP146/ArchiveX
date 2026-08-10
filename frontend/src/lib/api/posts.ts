@@ -41,13 +41,20 @@ export type AccountTimelineTab = "posts" | "replies" | "media";
 
 export const POSTS_PAGE_SIZE = 50;
 
-export function getTimelinePosts(tab: AccountTimelineTab, offset: number, xUserId?: string) {
+export function getTimelinePosts(
+  tab: AccountTimelineTab,
+  offset: number,
+  xUserId?: string,
+  searchQuery?: string,
+  includeReplies = false
+) {
   const query = new URLSearchParams({
     limit: String(POSTS_PAGE_SIZE),
     offset: String(offset)
   });
   if (xUserId !== undefined) query.set("account_x_user_id", xUserId);
-  if (tab === "posts") query.set("exclude_post_type", "reply");
+  if (searchQuery) query.set("q", searchQuery);
+  if (tab === "posts" && !includeReplies) query.set("exclude_post_type", "reply");
   if (tab === "replies") query.set("post_type", "reply");
   if (tab === "media") query.set("has_media", "true");
   return apiFetch<ArchivedPost[]>(`/api/posts?${query}`);

@@ -29,16 +29,26 @@ import "../accounts/account-page.css";
 export function PostTimeline({
   xUserId,
   tab,
+  searchQuery,
+  includeReplies = false,
   emptyMessage = "这个分类下还没有归档内容。"
 }: {
   xUserId?: string;
   tab: AccountTimelineTab;
+  searchQuery?: string;
+  includeReplies?: boolean;
   emptyMessage?: string;
 }) {
   const timelineEndRef = useRef<HTMLDivElement>(null);
   const posts = useInfiniteQuery({
-    queryKey: ["posts", xUserId ?? "all", tab],
-    queryFn: ({ pageParam }) => getTimelinePosts(tab, pageParam, xUserId),
+    queryKey: ["posts", xUserId ?? "all", tab, searchQuery ?? "", includeReplies],
+    queryFn: ({ pageParam }) => getTimelinePosts(
+      tab,
+      pageParam,
+      xUserId,
+      searchQuery,
+      includeReplies
+    ),
     initialPageParam: 0,
     getNextPageParam: (lastPage, pages) => lastPage.length === POSTS_PAGE_SIZE
       ? pages.reduce((total, page) => total + page.length, 0)

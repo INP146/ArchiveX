@@ -1,0 +1,87 @@
+.x-search-page {
+  min-height: 100%;
+  background: #000;
+}
+
+.x-search-form {
+  position: sticky;
+  z-index: 20;
+  top: 0;
+  display: grid;
+  min-height: 64px;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--x-border);
+  background: rgba(0, 0, 0, .94);
+  backdrop-filter: blur(12px);
+}
+
+.x-search-field {
+  display: grid;
+  height: 44px;
+  grid-template-columns: 20px minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: #202327;
+  color: var(--x-muted);
+}
+
+.x-search-field:focus-within {
+  border-color: var(--x-accent);
+  background: #000;
+  color: var(--x-accent);
+}
+
+.x-search-field > svg {
+  width: 18px;
+  height: 18px;
+}
+
+.x-search-field input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--x-text);
+  font: inherit;
+  font-size: 15px;
+}
+
+.x-search-field input::-webkit-search-cancel-button { display: none; }
+
+.x-search-field button,
+.x-search-submit {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 50%;
+  color: inherit;
+}
+
+.x-search-field button:hover { background: rgba(29, 155, 240, .12); }
+.x-search-field button svg { width: 17px; height: 17px; }
+
+.x-search-submit {
+  width: 40px;
+  height: 40px;
+  background: var(--x-accent);
+  color: #fff;
+}
+
+.x-search-submit:hover { background: #1a8cd8; }
+.x-search-submit:disabled { opacity: .45; }
+.x-search-submit svg { width: 19px; height: 19px; }
+
+@media (max-width: 700px) {
+  .x-search-form {
+    min-height: 58px;
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+}
