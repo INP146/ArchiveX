@@ -13,7 +13,6 @@ import { AccountPage } from "../features/accounts/account-page";
 import { AccountsPage } from "../features/accounts/accounts-page";
 import { LoginPage } from "../features/auth/login-page";
 import { DashboardPage } from "../features/dashboard/dashboard-page";
-import { SyncRunsPage } from "../features/sync-runs/sync-runs-page";
 import { SettingsPage } from "../features/settings/settings-page";
 import { TaskDetailsPage, TaskListPage, TaskSchedulesPage } from "../features/tasks/task-center-page";
 import { ArchiveSidebar } from "../components/archive-sidebar";
@@ -59,12 +58,6 @@ const accountsRoute = createRoute({
   component: AccountsPage
 });
 
-const syncRunsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/sync-runs",
-  component: SyncRunsPage
-});
-
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -94,7 +87,6 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   accountsRoute,
   accountRoute,
-  syncRunsRoute,
   settingsRoute,
   tasksRoute,
   taskDetailsRoute,
