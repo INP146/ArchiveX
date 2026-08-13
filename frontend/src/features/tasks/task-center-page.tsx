@@ -497,7 +497,18 @@ function taskSummary(task: TaskRecord) {
       .join(" · ");
   }
   if (accountLabel) return [accountLabel, account?.x_user_id].filter((value, index, values) => value && values.indexOf(value) === index).join(" · ");
+  if (task.name === "archivex.schedule_enabled_accounts") return scheduleResultSummary(task.result) ?? shortId(task.id);
   return shortId(task.id);
+}
+function scheduleResultSummary(result: unknown) {
+  if (!result || typeof result !== "object") return null;
+  const values = result as Record<string, unknown>;
+  const queued = typeof values.queued === "number" ? values.queued : 0;
+  const duplicates = typeof values.duplicates === "number" ? values.duplicates : 0;
+  const skipped = typeof values.skipped === "number" ? values.skipped : 0;
+  if (skipped > 0) return "未到同步时间，本轮未分发";
+  if (queued === 0 && duplicates === 0) return "没有可分发的归档账号";
+  return [`已分发 ${queued} 个账号`, duplicates ? `${duplicates} 个任务已存在` : null].filter(Boolean).join(" · ");
 }
 function mediaTypeLabel(mediaType?: string) {
   if (mediaType === "image") return "图片下载";

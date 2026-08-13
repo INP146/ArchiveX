@@ -46,6 +46,7 @@ _REDIS_CONNECTION_KWARGS = {
     "retry_on_timeout": True,
 }
 _SCHEDULE_DISPATCH_LEASE_SECONDS = 300
+_SCHEDULE_DUE_TOLERANCE_SECONDS = 1
 _SCHEDULE_DISPATCH_LEASE_KEY = "archivex:schedule:enabled-accounts:lease"
 _SCHEDULE_LAST_DISPATCH_KEY = "archivex:schedule:enabled-accounts:last-dispatched-at"
 
@@ -438,7 +439,10 @@ async def _begin_schedule_dispatch(task_id: str, now: float | None = None) -> st
         except (TypeError, ValueError):
             logger.warning("Replacing invalid persisted scheduler timestamp %r", last_dispatch)
             elapsed = settings.archive_sync_interval_seconds
-        dispatch_due = elapsed >= settings.archive_sync_interval_seconds
+        dispatch_due = (
+            elapsed + _SCHEDULE_DUE_TOLERANCE_SECONDS
+            >= settings.archive_sync_interval_seconds
+        )
         return "due" if dispatch_due else "not_due"
     finally:
         if lease_acquired and not dispatch_due:
@@ -730,7 +734,8 @@ async def schedule_enabled_accounts_task(
     context: Context = TaskiqDepends(),
 ) -> dict[str, int]:
     task_id = context.message.task_id
-    dispatch_decision = await _begin_schedule_dispatch(task_id)
+    dispatch_started_at = time.time()
+    dispatch_decision = await _begin_schedule_dispatch(task_id, now=dispatch_started_at)
     if dispatch_decision == "busy":
         raise RuntimeError("another scheduler dispatch is still in progress")
     if dispatch_decision == "not_due":
@@ -750,6 +755,8 @@ async def schedule_enabled_accounts_task(
     except BaseException:
         await _finish_schedule_dispatch(task_id, completed=False)
         raise
-    await _finish_schedule_dispatch(task_id, completed=True)
+    # Anchor the interval to the start of a successful dispatch. Using its finish
+    # time makes the next fixed scheduler tick arrive slightly "too early".
+    await _finish_schedule_dispatch(task_id, completed=True, now=dispatch_started_at)
     logger.info("Scheduled account synchronization: %d queued, %d duplicate", queued, duplicates)
     return {"queued": queued, "duplicates": duplicates, "skipped": 0}

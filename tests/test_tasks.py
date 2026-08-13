@@ -793,7 +793,7 @@ def test_scheduler_dispatch_state_survives_restart_and_serializes_dispatch(monke
     async def exercise_gate():
         assert await tasks._begin_schedule_dispatch("first", now=100) == "not_due"
         assert await tasks._begin_schedule_dispatch("restart", now=130) == "not_due"
-        assert await tasks._begin_schedule_dispatch("due", now=160) == "due"
+        assert await tasks._begin_schedule_dispatch("due", now=159.5) == "due"
         await tasks._renew_schedule_dispatch("due")
         assert await tasks._begin_schedule_dispatch("concurrent", now=161) == "busy"
         await tasks._finish_schedule_dispatch("due", completed=True, now=161)
@@ -818,6 +818,42 @@ def test_scheduler_immediate_start_is_explicit(monkeypatch) -> None:
     asyncio.run(exercise_gate())
 
     assert fake_redis.values[tasks._SCHEDULE_LAST_DISPATCH_KEY] == "101"
+
+
+def test_successful_scheduler_dispatch_anchors_interval_to_start(monkeypatch) -> None:
+    finished = []
+
+    async def begin(task_id, now=None):
+        assert task_id == "schedule-task"
+        assert now == 100.25
+        return "due"
+
+    async def renew(task_id):
+        assert task_id == "schedule-task"
+
+    async def enqueue(x_user_id, trigger):
+        assert trigger == "scheduled"
+        return tasks.TaskSubmission(f"sync-{x_user_id}", "queued", False)
+
+    async def finish(task_id, *, completed, now=None):
+        finished.append((task_id, completed, now))
+
+    monkeypatch.setattr(tasks.time, "time", lambda: 100.25)
+    monkeypatch.setattr(tasks, "_begin_schedule_dispatch", begin)
+    monkeypatch.setattr(tasks, "_renew_schedule_dispatch", renew)
+    monkeypatch.setattr(tasks, "_finish_schedule_dispatch", finish)
+    monkeypatch.setattr(
+        tasks,
+        "_repository",
+        lambda: SimpleNamespace(list_enabled_account_ids=lambda: ["42"]),
+    )
+    monkeypatch.setattr(tasks, "enqueue_account_sync", enqueue)
+    context = SimpleNamespace(message=SimpleNamespace(task_id="schedule-task"))
+
+    result = asyncio.run(tasks.schedule_enabled_accounts_task.original_func(context=context))
+
+    assert result == {"queued": 1, "duplicates": 0, "skipped": 0}
+    assert finished == [("schedule-task", True, 100.25)]
 
 
 def test_gallery_dl_download_has_a_hard_timeout(tmp_path, monkeypatch) -> None:
