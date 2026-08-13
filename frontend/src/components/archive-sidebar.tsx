@@ -2,8 +2,6 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import {
   FiArchive,
-  FiDatabase,
-  FiDownload,
   FiHome,
   FiImage,
   FiLogOut,
@@ -69,18 +67,8 @@ export function ArchiveSidebar({
             <Link to="/accounts" className={`x-sidebar-item ${accountsActive ? "is-active" : ""}`}><FiUsers /><span>归档账号</span></Link>
             <a href={mediaPath} className={`x-sidebar-item ${mediaActive ? "is-active" : ""}`}><FiImage /><span>媒体库</span></a>
             <Link to="/tasks" className={`x-sidebar-item ${tasksActive ? "is-active" : ""}`}><FiServer /><span>任务中心</span></Link>
-            {account
-              ? <a href={`/api/accounts/${account.x_user_id}`} target="_blank" rel="noreferrer" className="x-sidebar-item"><FiDatabase /><span>数据导出</span></a>
-              : <span className="x-sidebar-item is-disabled"><FiDatabase /><span>数据导出</span></span>}
             <Link to="/settings" className={`x-sidebar-item ${pathname === "/settings" ? "is-active" : ""}`}><FiSettings /><span>设置</span></Link>
-            <button type="button" className="x-sidebar-item"><FiMoreHorizontal /><span>更多</span></button>
           </nav>
-
-          {account ? (
-            <a href={`/api/accounts/${account.x_user_id}`} target="_blank" rel="noreferrer" className="x-sidebar-primary">
-              <FiDownload /><span>导出归档</span>
-            </a>
-          ) : <span className="x-sidebar-primary is-disabled"><FiDownload /><span>导出归档</span></span>}
 
           <div className="x-sidebar-account-wrap">
             {accountMenuOpen && (
@@ -210,9 +198,6 @@ export function ArchiveSidebar({
               <Link to="/accounts"><FiUsers /><span>归档账号</span></Link>
               <a href={mediaPath}><FiImage /><span>媒体库</span></a>
               <Link to="/tasks"><FiServer /><span>任务中心</span></Link>
-              {account
-                ? <a href={`/api/accounts/${account.x_user_id}`} target="_blank" rel="noreferrer"><FiDownload /><span>数据导出</span></a>
-                : <span className="is-disabled"><FiDownload /><span>数据导出</span></span>}
               <Link to="/settings"><FiSettings /><span>设置</span></Link>
             </nav>
             <button type="button" className="x-mobile-drawer-logout" onClick={onLogout}>

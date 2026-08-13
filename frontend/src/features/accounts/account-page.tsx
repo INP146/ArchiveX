@@ -9,7 +9,6 @@ import {
   FiPause,
   FiPlay,
   FiRefreshCw,
-  FiShare,
   FiUser
 } from "react-icons/fi";
 
@@ -109,16 +108,6 @@ export function AccountPage() {
               >
                 <FiRefreshCw className={sync.isPending ? "is-spinning" : ""} />
               </button>
-              <a
-                className="x-icon-button x-outline-button"
-                href={`/api/accounts/${profile.x_user_id}`}
-                target="_blank"
-                rel="noreferrer"
-                aria-label="导出当前账号资料"
-                title="导出资料"
-              >
-                <FiShare />
-              </a>
               <button
                 className="x-archive-toggle"
                 type="button"
