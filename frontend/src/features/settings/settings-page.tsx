@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useState } from "react";
-import { FiCheck, FiEdit3, FiServer, FiTrash2, FiX } from "react-icons/fi";
+import { FiCheck, FiEdit3, FiKey, FiServer, FiTrash2, FiX } from "react-icons/fi";
 
 import {
   CrawlerAccount,
   getCrawlerAccounts,
+  importCrawlerAccountCookies,
   setCrawlerAccountProxy
 } from "../../lib/api/crawler-accounts";
 import { formatCount } from "../../lib/format-number";
@@ -39,7 +40,75 @@ export function SettingsPage() {
           <CrawlerAccountRow key={account.username} account={account} />
         ))}
       </section>
+      <SessionImportForm onImported={() => accounts.refetch()} />
     </div>
+  );
+}
+
+function SessionImportForm({ onImported }: { onImported: () => Promise<unknown> }) {
+  const [username, setUsername] = useState("");
+  const [cookies, setCookies] = useState("");
+  const [replace, setReplace] = useState(false);
+  const importSession = useMutation({
+    mutationFn: () => importCrawlerAccountCookies(username.trim(), cookies.trim(), replace),
+    onSuccess: async () => {
+      await onImported();
+      setUsername("");
+      setCookies("");
+      setReplace(false);
+    }
+  });
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (username.trim() && cookies.trim()) importSession.mutate();
+  }
+
+  return (
+    <section className="x-session-import-section" aria-labelledby="session-import-heading">
+      <div className="x-settings-section-heading">
+        <div>
+          <h2 id="session-import-heading">添加采集账号</h2>
+          <span>使用 X 浏览器 Cookie 登录</span>
+        </div>
+        <FiKey aria-hidden="true" />
+      </div>
+      <form className="x-session-import-form" onSubmit={submit}>
+        <label htmlFor="crawler-username">X 用户名</label>
+        <input
+          id="crawler-username"
+          value={username}
+          onChange={(event) => setUsername(event.target.value)}
+          placeholder="例如 archivex_login"
+          autoComplete="off"
+          required
+        />
+        <label htmlFor="crawler-cookies">Cookie 字符串</label>
+        <textarea
+          id="crawler-cookies"
+          value={cookies}
+          onChange={(event) => setCookies(event.target.value)}
+          placeholder="auth_token=...; ct0=..."
+          autoComplete="off"
+          spellCheck={false}
+          rows={3}
+          required
+        />
+        <label className="x-session-replace">
+          <input
+            type="checkbox"
+            checked={replace}
+            onChange={(event) => setReplace(event.target.checked)}
+          />
+          替换已有同名会话
+        </label>
+        <button type="submit" disabled={!username.trim() || !cookies.trim() || importSession.isPending}>
+          {importSession.isPending ? "保存中..." : "保存采集账号"}
+        </button>
+        {importSession.error && <p className="x-session-import-error">{importSession.error.message}</p>}
+        {importSession.isSuccess && <p className="x-session-import-success">采集账号已保存。</p>}
+      </form>
+    </section>
   );
 }
 

@@ -46,6 +46,12 @@ class UpdateCrawlerAccountRequest(BaseModel):
     proxy: str | None = Field(default=None, max_length=2048)
 
 
+class CreateCrawlerAccountRequest(BaseModel):
+    username: str = Field(pattern=r"^[A-Za-z0-9_]{1,64}$")
+    cookies: str = Field(min_length=1, max_length=4096)
+    replace: bool = False
+
+
 def create_auth_router(auth_token: str, display_name: str, username: str,
                        avatar_url: str | None) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["authentication"])
@@ -92,6 +98,22 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
     async def list_crawler_accounts() -> list[dict[str, Any]]:
         accounts = await session_accounts.list_accounts()
         return [account.__dict__ for account in accounts]
+
+    @router.post("/crawler-accounts", status_code=status.HTTP_201_CREATED)
+    async def create_crawler_account(payload: CreateCrawlerAccountRequest) -> dict[str, Any]:
+        try:
+            account = await session_accounts.import_cookies(
+                payload.username, payload.cookies.strip(), payload.replace
+            )
+        except ValueError as exc:
+            message = str(exc)
+            if "already exists" in message:
+                raise HTTPException(status_code=409, detail=message) from exc
+            raise HTTPException(status_code=422, detail=message) from exc
+        except Exception as exc:
+            logger.exception("crawler session import failed for %s", payload.username)
+            raise HTTPException(status_code=422, detail="X cookies could not be imported") from exc
+        return account.__dict__
 
     @router.patch("/crawler-accounts/{username}")
     async def update_crawler_account(

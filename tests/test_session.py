@@ -111,12 +111,24 @@ def test_session_account_manager_updates_real_twscrape_database(tmp_path) -> Non
     manager.pool = pool
 
     async def update_proxy() -> None:
-        await pool.add_account_cookies("pni146", "auth_token=a; ct0=b")
-        updated = await manager.set_proxy("pni146", "http://proxy.test:8080")
+        await pool.add_account_cookies("archivex_test_login", "auth_token=a; ct0=b")
+        updated = await manager.set_proxy("archivex_test_login", "http://proxy.test:8080")
         assert updated is not None
         assert updated.proxy_url == "http://proxy.test:8080"
-        stored = await pool.get_account("pni146")
+        stored = await pool.get_account("archivex_test_login")
         assert stored is not None
         assert stored.proxy == "http://proxy.test:8080"
 
     asyncio.run(update_proxy())
+
+
+def test_session_account_manager_imports_cookies(tmp_path) -> None:
+    manager = TwscrapeSessionAccountManager(tmp_path / "sessions")
+
+    async def import_session() -> None:
+        account = await manager.import_cookies("archivex_test_login", "auth_token=a; ct0=b")
+        assert account.username == "archivex_test_login"
+        assert account.active is True
+        assert await manager.list_accounts() == [account]
+
+    asyncio.run(import_session())

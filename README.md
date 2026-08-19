@@ -64,9 +64,14 @@ account/media submissions are coalesced, and transient failures use delayed
 retries with jitter. Set
 `ARCHIVE_MEDIA_ENABLED=false` to archive post metadata without downloading
 files. `TWSCRAPE_SESSION_PATH` is either a
-twscrape account database file or a directory containing `accounts.db`. Its
-accounts and login state must be provisioned before ArchiveX starts; credentials
-are not accepted by the web service or stored in this repository.
+twscrape account database file or a directory containing `accounts.db`. After
+the Compose stack is running, open **Settings** in the Web UI to add a crawler
+account: enter the X login username and paste the browser cookie string
+containing `auth_token` and `ct0`. The cookie is written directly to the
+persistent twscrape database, is never displayed again, and is only accepted
+for the authenticated Web session. Enable **replace existing session** only
+when deliberately rotating an account session. Credentials are not stored in
+this repository.
 
 ## Authentication and API
 
@@ -149,34 +154,21 @@ TypeScript types from the FastAPI OpenAPI document when the API changes.
 
 ## X Session Setup
 
-Copy and run this command first:
+The stable Docker workflow is Web-only. Start the Compose stack, sign in, and
+open **Settings**. Under **添加采集账号**, enter the X login username and paste
+the browser cookie string containing `auth_token` and `ct0`, then save. The
+session status and request count appear in the same page. HTTP proxies can be
+added or cleared from each account row.
 
-```sh
-.venv/bin/archivex-session --session-path ./data/twscrape cookies --username your_x_login --from-clipboard
-```
+To obtain the cookie string, use the browser's developer tools on `x.com`,
+copy the value from an authenticated request's `Cookie` header, and paste it
+directly into the form. Treat it like a password: use HTTPS for any non-local
+deployment, never put it in chat or shell history, and rotate the session in
+Settings when it expires. The ArchiveX web service stores it only in the
+persistent `./data/twscrape/accounts.db` file and never displays it again.
 
-While it is waiting, copy the cookie string from the browser. ArchiveX detects
-the new clipboard content and imports it automatically; there is nothing to
-paste into the terminal and no second Enter press.
-
-Check that the account is active:
-
-```sh
-.venv/bin/archivex-session --session-path ./data/twscrape status
-```
-
-An HTTP proxy can also be assigned to an existing twscrape login account. The
-interactive prompt keeps credentials out of shell history:
-
-```sh
-.venv/bin/archivex-session --session-path ./data/twscrape proxy --username pni146
-```
-
-Use `proxy --username pni146 --clear` to return that account to a direct
-connection.
-
-Then start ArchiveX and add public accounts from the Web account-management
-page. These targets do not need to be the account used for the session.
+These crawler login accounts are separate from the public X accounts added on
+the account-management page.
 
 ## Tests
 

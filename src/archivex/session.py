@@ -28,17 +28,33 @@ class SessionAccountSummary:
 class SessionAccountManager(Protocol):
     async def list_accounts(self) -> list[SessionAccountSummary]: ...
 
+    async def import_cookies(
+        self, username: str, cookies: str, replace: bool = False
+    ) -> SessionAccountSummary: ...
+
     async def set_proxy(self, username: str, proxy: str | None) -> SessionAccountSummary | None: ...
 
 
 class TwscrapeSessionAccountManager:
     def __init__(self, session_path: Path) -> None:
-        self.pool = AccountsPool(str(session_database_path(session_path)))
+        database_path = session_database_path(session_path)
+        database_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _restrict_permissions(database_path.parent)
+        self.pool = AccountsPool(str(database_path))
 
     async def list_accounts(self) -> list[SessionAccountSummary]:
         accounts = await self.pool.get_all()
         return sorted((_session_account_summary(account) for account in accounts),
                       key=lambda account: account.username.casefold())
+
+    async def import_cookies(
+        self, username: str, cookies: str, replace: bool = False
+    ) -> SessionAccountSummary:
+        await import_cookies(self.pool, username, cookies, replace)
+        account = await self.pool.get_account(username)
+        if account is None:
+            raise ValueError("session was not saved")
+        return _session_account_summary(account)
 
     async def set_proxy(self, username: str,
                         proxy: str | None) -> SessionAccountSummary | None:

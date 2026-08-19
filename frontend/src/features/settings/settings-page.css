@@ -21,6 +21,7 @@
 .x-settings-header h1 { margin: 0; font-size: 20px; font-weight: 800; }
 .x-settings-header > span { color: var(--x-muted); font-size: 13px; }
 .x-crawler-section { border-bottom: 1px solid var(--x-border); }
+.x-session-import-section { border-bottom: 1px solid var(--x-border); }
 
 .x-settings-section-heading {
   display: flex;
@@ -112,6 +113,39 @@
 
 .x-proxy-input-row button:disabled { opacity: .5; }
 .x-proxy-form p { margin: 8px 0 0; color: #f4212e; font-size: 13px; }
+
+.x-session-import-form { display: grid; gap: 8px; padding: 16px; }
+.x-session-import-form label { color: var(--x-muted); font-size: 13px; }
+.x-session-import-form input:not([type="checkbox"]),
+.x-session-import-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 11px;
+  border: 1px solid #536471;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--x-text);
+  outline: 0;
+  font: inherit;
+}
+.x-session-import-form textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.x-session-import-form input:focus, .x-session-import-form textarea:focus { border-color: var(--x-accent); }
+.x-session-replace { display: flex; align-items: center; gap: 8px; }
+.x-session-replace input { accent-color: var(--x-accent); }
+.x-session-import-form button[type="submit"] {
+  justify-self: start;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: #eff3f4;
+  color: #0f1419;
+  font-size: 14px;
+  font-weight: 700;
+}
+.x-session-import-form button:disabled { opacity: .5; }
+.x-session-import-error, .x-session-import-success { margin: 0; font-size: 13px; }
+.x-session-import-error { color: #f4212e; }
+.x-session-import-success { color: #00ba7c; }
 
 @media (max-width: 700px) {
   .x-settings-page { width: 100%; }

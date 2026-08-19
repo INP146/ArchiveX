@@ -41,7 +41,7 @@ class FakeSessionAccountManager:
 
     async def list_accounts(self):
         return [SessionAccountSummary(
-            username="pni146",
+            username="archivex_test_login",
             active=True,
             proxy_configured=self.proxy is not None,
             proxy_url="http://***@proxy.test:8080" if self.proxy else None,
@@ -50,10 +50,19 @@ class FakeSessionAccountManager:
         )]
 
     async def set_proxy(self, username, proxy):
-        if username != "pni146":
+        if username != "archivex_test_login":
             return None
         from archivex.session import normalize_http_proxy
         self.proxy = normalize_http_proxy(proxy) if proxy is not None else None
+        return (await self.list_accounts())[0]
+
+    async def import_cookies(self, username, cookies, replace=False):
+        if username != "archivex_test_login":
+            if not replace:
+                raise ValueError("a session for this username already exists; rerun with --replace")
+        if cookies != "auth_token=a; ct0=b":
+            raise ValueError("X cookies could not be imported")
+        self.proxy = None
         return (await self.list_accounts())[0]
 
 
@@ -181,7 +190,7 @@ def test_crawler_account_proxy_can_be_assigned_and_cleared(tmp_path) -> None:
         accounts = client.get("/api/crawler-accounts", headers=headers)
         assert accounts.status_code == 200
         assert accounts.json() == [{
-            "username": "pni146",
+            "username": "archivex_test_login",
             "active": True,
             "proxy_configured": False,
             "proxy_url": None,
@@ -190,7 +199,7 @@ def test_crawler_account_proxy_can_be_assigned_and_cleared(tmp_path) -> None:
         }]
 
         updated = client.patch(
-            "/api/crawler-accounts/pni146",
+            "/api/crawler-accounts/archivex_test_login",
             json={"proxy": "http://user:secret@proxy.test:8080"},
             headers=headers,
         )
@@ -199,7 +208,7 @@ def test_crawler_account_proxy_can_be_assigned_and_cleared(tmp_path) -> None:
         assert manager.proxy == "http://user:secret@proxy.test:8080"
 
         invalid = client.patch(
-            "/api/crawler-accounts/pni146",
+            "/api/crawler-accounts/archivex_test_login",
             json={"proxy": "socks5://proxy.test:1080"},
             headers=headers,
         )
@@ -207,13 +216,32 @@ def test_crawler_account_proxy_can_be_assigned_and_cleared(tmp_path) -> None:
         assert "http://host:port" in invalid.json()["detail"]
 
         cleared = client.patch(
-            "/api/crawler-accounts/pni146", json={"proxy": None}, headers=headers
+            "/api/crawler-accounts/archivex_test_login", json={"proxy": None}, headers=headers
         )
         assert cleared.status_code == 200
         assert cleared.json()["proxy_configured"] is False
         assert client.patch(
             "/api/crawler-accounts/missing", json={"proxy": None}, headers=headers
         ).status_code == 404
+
+
+def test_crawler_account_cookies_can_be_imported_from_web(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    manager = FakeSessionAccountManager()
+    with TestClient(create_app(settings, FakeSource(), manager)) as client:
+        headers = {"Authorization": "Bearer test-token"}
+        imported = client.post(
+            "/api/crawler-accounts",
+            json={"username": "archivex_test_login", "cookies": "auth_token=a; ct0=b"},
+            headers=headers,
+        )
+        assert imported.status_code == 201
+        assert imported.json()["username"] == "archivex_test_login"
+        assert client.post(
+            "/api/crawler-accounts",
+            json={"username": "bad user", "cookies": "auth_token=a; ct0=b"},
+            headers=headers,
+        ).status_code == 422
 
 
 def test_archive_api_filters_post_types_and_paginates(tmp_path) -> None:
