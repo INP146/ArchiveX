@@ -1,9 +1,10 @@
-# ArchiveX v0.1.0 稳定版发布说明
+# ArchiveX v0.1.1 稳定版发布说明
 
 ## 发布范围
 
-`v0.1.0` 是 ArchiveX 的首个稳定版本，正式支持单机 Docker Compose 部署。
+`v0.1.1` 是 ArchiveX 的首个可用稳定版本，正式支持单机 Docker Compose 部署。
 本地 Python 与 Vite 启动方式只用于开发，不属于稳定版部署接口。
+`v0.1.0` 的 Web 镜像缺少 Nginx 静态文件根目录配置，会使页面返回 500，不能部署。
 
 首版包含：
 
@@ -39,13 +40,13 @@ Node.js。
 
 ## 发布镜像
 
-推送 `v0.1.0` 这类版本 tag 会触发
+推送 `v0.1.1` 这类版本 tag 会触发
 `.github/workflows/publish-container-images.yml`，向 GitHub Container Registry
 发布两个 `linux/amd64`、`linux/arm64` 镜像：
 
 ```text
-ghcr.io/inp146/archivex:0.1.0
-ghcr.io/inp146/archivex-web:0.1.0
+ghcr.io/inp146/archivex:0.1.1
+ghcr.io/inp146/archivex-web:0.1.1
 ```
 
 workflow 会从 GitHub 仓库路径动态生成全小写镜像名，不在 workflow 中硬编码账号。
@@ -130,4 +131,4 @@ docker compose ps
 - [ ] 验证桌面与移动端主要导航，完成 `.agents/MOBILE_UI_DESIGN_QA.md`。
 - [ ] 创建并验证一次备份，再恢复到独立目录。
 - [ ] 确认 README、MIT License、已知限制和安全说明准确。
-- [ ] 创建并推送带注释的 `v0.1.0` tag，确认镜像发布后再发布本文件中的版本说明。
+- [ ] 创建并推送带注释的 `v0.1.1` tag，确认镜像发布后再发布本文件中的版本说明。

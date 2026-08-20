@@ -76,7 +76,7 @@ def create_app(settings: Settings | None = None, post_source: PostSource | None 
         yield
         logger.info("ArchiveX stopped")
 
-    app = FastAPI(title="ArchiveX", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="ArchiveX", version="0.1.1", lifespan=lifespan)
     app.add_middleware(
         SessionMiddleware,
         secret_key=app_settings.web_session_secret or _derived_session_secret(app_settings.web_auth_token),
