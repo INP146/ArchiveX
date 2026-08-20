@@ -11,6 +11,6 @@ FROM nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
-RUN nginx -t
+RUN test -s /usr/share/nginx/html/index.html && nginx -t
 
 EXPOSE 80
