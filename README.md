@@ -38,23 +38,25 @@ frontend. The API address defaults to `http://localhost:8000`.
 docker compose up --build
 ```
 
-This starts the frontend, API, Redis, both workers, and the scheduler. No `.env`
-file is required: container paths, queue topology, Redis connectivity, and task
-settings are declared in `docker-compose.yml`. Open `http://localhost:8000`.
+This starts the frontend, API, Redis, both workers, and the scheduler. No
+separate Python, Node.js, or `.env` setup is required. Open
+`http://localhost:8000` and sign in with the Compose authentication token. The
+example token is `change-me-before-production`; change `WEB_AUTH_TOKEN` in
+`docker-compose.yml` before exposing ArchiveX outside a trusted local network.
 
-The Compose file contains a development authentication-token default so the
-stack can start by itself. Set `ARCHIVEX_WEB_AUTH_TOKEN` in the shell before
-starting a public deployment. The `./data` directory is mounted at `/data` in
-the Python containers and holds the SQLite databases, archive files, and
-twscrape session data. Keep this directory when recreating containers.
+The repository-root `./data` directory is mounted at `/data` in the Python
+containers and holds the SQLite databases, archive files, and twscrape session
+data. Redis queue data uses the Compose-managed `redis_data` volume. The
+backend image prepares its own data paths and then runs ArchiveX as an
+unprivileged user. Keep both stores when recreating containers.
 
 ## Configuration
 
-`.env.example` is exclusively the host-development template and therefore uses
-`./data/...` paths plus host Redis/API addresses. Container configuration lives
-in `docker-compose.yml`; it does not use the host `.env` as a service env file.
-Optional deployment-only substitutions use the `ARCHIVEX_WEB_*` prefix.
-Archive targets are added in the Web UI and stored by stable X user ID.
+`.env.example` is only for local development with `scripts/setup_venv.py`. The
+Docker deployment does not use it: paths, queue topology, Redis connectivity,
+authentication, and runtime settings are all declared directly in
+`docker-compose.yml`. Archive targets are added in the Web UI and stored by
+stable X user ID.
 
 The application uses Taskiq and Redis for durable background work. A single
 scheduler enqueues enabled accounts at `ARCHIVE_SYNC_INTERVAL_SECONDS`, the
@@ -79,8 +81,8 @@ Browser clients establish a session with `POST /api/auth/session` and then use a
 signed, HttpOnly cookie. `DELETE /api/auth/session` logs out and `GET
 /api/auth/session` reports whether the browser is authenticated. Script clients
 can continue to use `Authorization: Bearer <WEB_AUTH_TOKEN>` for protected API
-routes. Set a separate random `WEB_SESSION_SECRET` of at least 32 characters in
-production, and set `WEB_COOKIE_SECURE=true` when serving over HTTPS.
+routes. `WEB_SESSION_SECRET` is optional; when omitted, ArchiveX derives it from
+`WEB_AUTH_TOKEN`. Set `WEB_COOKIE_SECURE=true` when serving over HTTPS.
 `WEB_AUTH_DISPLAY_NAME`, `WEB_AUTH_USERNAME`, and `WEB_AUTH_AVATAR_URL` define
 the identity shown for the current token-authenticated user in the web sidebar;
 they are independent from the X accounts being archived.
@@ -169,6 +171,45 @@ persistent `./data/twscrape/accounts.db` file and never displays it again.
 
 These crawler login accounts are separate from the public X accounts added on
 the account-management page.
+
+## Published container images
+
+Pushing a version tag such as `v0.1.0` publishes two multi-platform images to
+GitHub Container Registry:
+
+```text
+ghcr.io/inp146/archivex:0.1.0
+ghcr.io/inp146/archivex-web:0.1.0
+```
+
+The repository path is derived by the workflow and converted to lowercase, so
+the workflow does not hard-code an owner account. The repository includes
+`docker-compose.ghcr.yml` for an image-only deployment. From the separate
+deployment directory, download the versioned file as `./docker-compose.yml`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/INP146/ArchiveX/v0.1.0/docker-compose.ghcr.yml -o ./docker-compose.yml
+```
+
+Replace the example `WEB_AUTH_TOKEN`, then deploy without the source tree:
+
+```sh
+docker compose pull
+docker compose up -d
+```
+
+This deployment file has no `build` or `.env` dependency. Workers, the
+scheduler, and `tools` all use the backend image. It pins version `0.1.0`
+instead of relying on `latest`; change both image tags when upgrading. If the
+packages are private, log in to `ghcr.io` before pulling.
+
+## Backup, restore, and upgrades
+
+Use `docker compose run --rm tools backup` to create a verified archive under
+`backups/`; the maintenance command runs entirely from the Docker image.
+Restore and upgrade procedures, security requirements, known limitations, and
+the stable-release checklist are documented in
+[`.agents/RELEASE_V0.1.0.md`](.agents/RELEASE_V0.1.0.md).
 
 ## Tests
 

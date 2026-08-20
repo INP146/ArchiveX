@@ -1,3 +1,6 @@
+# Image-only deployment for ArchiveX releases published to GitHub Container Registry.
+name: archivex
+
 x-archivex-environment: &archivex-environment
   TWSCRAPE_SESSION_PATH: /data/twscrape
   ARCHIVE_DB_PATH: /data/archive.sqlite3
@@ -31,8 +34,8 @@ x-archivex-environment: &archivex-environment
   LOG_LEVEL: INFO
 
 x-archivex-service: &archivex-service
-  build: .
-  image: archivex:local
+  image: ghcr.io/inp146/archivex:0.1.0
+  pull_policy: always
   volumes:
     - ./data:/data
   environment: *archivex-environment
@@ -41,6 +44,7 @@ x-archivex-service: &archivex-service
 services:
   redis:
     image: redis:8-alpine@sha256:978f0e01593e65eed801f2402944efcd936d43b5027e4908a7897baf88ed6241
+    pull_policy: always
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     volumes:
       - redis_data:/data
@@ -60,8 +64,8 @@ services:
       retries: 20
 
   web:
-    build: ./frontend
-    image: archivex-web:local
+    image: ghcr.io/inp146/archivex-web:0.1.0
+    pull_policy: always
     ports:
       - "8000:80"
     depends_on:
@@ -145,8 +149,8 @@ services:
       start_period: 10s
 
   tools:
-    build: .
-    image: archivex:local
+    image: ghcr.io/inp146/archivex:0.1.0
+    pull_policy: always
     profiles: ["tools"]
     entrypoint: ["archivex-data"]
     working_dir: /workspace

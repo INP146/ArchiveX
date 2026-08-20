@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.32.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -28,6 +28,7 @@ dev = [
 
 [project.scripts]
 archivex = "archivex.main:main"
+archivex-data = "archivex.data_backup:main"
 archivex-session = "archivex.session:main"
 
 [tool.pytest.ini_options]
