@@ -88,7 +88,7 @@ services:
     build: ./frontend
     image: archivex-web:local
     ports:
-      - "8400:80"
+      - "8000:80"
     depends_on:
       archivex:
         condition: service_healthy

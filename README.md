@@ -35,14 +35,20 @@ frontend. The API address defaults to `http://localhost:8000`.
 ## Docker Compose deployment
 
 ```sh
-docker compose up --build
+cp docker-compose.build.yml docker-compose.yml
+docker compose up -d --build
 ```
+
+`docker-compose.build.yml` is the tracked build template. The copied
+`docker-compose.yml` is intentionally local-only and ignored by Git, similar
+to `.env`; keep your deployment-specific values there. Before exposing
+ArchiveX outside a trusted local network, change `WEB_AUTH_TOKEN` in the local
+`docker-compose.yml`.
 
 This starts the frontend, API, Redis, both workers, and the scheduler. No
 separate Python, Node.js, or `.env` setup is required. Open
-`http://localhost:8400` and sign in with the Compose authentication token. The
-example token is `change-me-before-production`; change `WEB_AUTH_TOKEN` in
-`docker-compose.yml` before exposing ArchiveX outside a trusted local network.
+`http://localhost:8000` and sign in with the Compose authentication token. The
+example token is `change-me-before-production`.
 
 SQLite WAL files and twscrape session state live in the Compose-managed
 `state_data` volume on Docker's Linux filesystem. Archived media remains
@@ -64,8 +70,8 @@ rollback procedure is documented in
 `.env.example` is only for local development with `scripts/setup_venv.py`. The
 Docker deployment does not use it: paths, queue topology, Redis connectivity,
 authentication, and runtime settings are all declared directly in
-`docker-compose.yml`. Archive targets are added in the Web UI and stored by
-stable X user ID.
+the local `docker-compose.yml` copied from `docker-compose.build.yml`. Archive
+targets are added in the Web UI and stored by stable X user ID.
 
 The application uses Taskiq and Redis for durable background work. A single
 scheduler enqueues enabled accounts at `ARCHIVE_SYNC_INTERVAL_SECONDS`, the
@@ -131,7 +137,7 @@ scheduler      the single Taskiq scheduler
 ```
 
 After signing in to ArchiveX, use **任务中心** in the Web sidebar. In Compose it
-is available at `http://localhost:8400/tasks`; local Vite development uses
+is available at `http://localhost:8000/tasks`; local Vite development uses
 `http://localhost:5173/tasks`. The integrated page shows logical tasks and every
 execution attempt, including queued, running, waiting-to-retry, completed,
 failed, and abandoned states. Manual retries create a new task linked to their
@@ -139,7 +145,8 @@ source; automatic retries remain attempts of the original task. Task lifecycle
 events are written directly to the unified archive database and do not depend
 on the API process being available.
 
-Compose queue settings are declared in `docker-compose.yml`. Important
+Compose queue settings are declared in the local `docker-compose.yml` (copied
+from `docker-compose.build.yml`). Important
 operational limits include `TASK_SYNC_TIMEOUT_SECONDS`,
 `TASK_MEDIA_TIMEOUT_SECONDS`, retry count and delay settings, and
 `TASK_DEDUPE_TTL_SECONDS`. Redis is kept internal to the Compose network and
