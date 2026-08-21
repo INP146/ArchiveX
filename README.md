@@ -190,12 +190,12 @@ the account-management page.
 
 ## Published container images
 
-Pushing a version tag such as `v0.1.1` publishes two multi-platform images to
+Pushing a version tag such as `v0.1.2-rc1` publishes two multi-platform images to
 GitHub Container Registry:
 
 ```text
-ghcr.io/inp146/archivex:0.1.1
-ghcr.io/inp146/archivex-web:0.1.1
+ghcr.io/inp146/archivex:0.1.2-rc1
+ghcr.io/inp146/archivex-web:0.1.2-rc1
 ```
 
 The repository path is derived by the workflow and converted to lowercase, so
@@ -204,7 +204,7 @@ the workflow does not hard-code an owner account. The repository includes
 deployment directory, download the versioned file as `./docker-compose.yml`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/INP146/ArchiveX/v0.1.1/docker-compose.ghcr.yml -o ./docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/INP146/ArchiveX/v0.1.2-rc1/docker-compose.ghcr.yml -o ./docker-compose.yml
 ```
 
 Replace the example `WEB_AUTH_TOKEN`, then deploy without the source tree:
@@ -215,7 +215,7 @@ docker compose up -d
 ```
 
 This deployment file has no `build` or `.env` dependency. Workers, the
-scheduler, and `tools` all use the backend image. It pins version `0.1.1`
+scheduler, and `tools` all use the backend image. It pins version `0.1.2-rc1`
 instead of relying on `latest`; change both image tags when upgrading. If the
 packages are private, log in to `ghcr.io` before pulling.
 

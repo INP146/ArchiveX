@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "archivex"
-version = "0.1.1"
+version = "0.1.2rc1"
 description = "Self-hosted X account archive"
 readme = "README.md"
 requires-python = ">=3.11"

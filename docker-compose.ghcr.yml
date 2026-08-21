@@ -36,7 +36,7 @@ x-archivex-environment: &archivex-environment
   LOG_LEVEL: INFO
 
 x-archivex-service: &archivex-service
-  image: ghcr.io/inp146/archivex:0.1.1
+  image: ghcr.io/inp146/archivex:0.1.2-rc1
   pull_policy: always
   volumes:
     - ./data:/data
@@ -66,7 +66,7 @@ services:
       retries: 20
 
   web:
-    image: ghcr.io/inp146/archivex-web:0.1.1
+    image: ghcr.io/inp146/archivex-web:0.1.2-rc1
     pull_policy: always
     ports:
       - "8000:80"
@@ -155,7 +155,7 @@ services:
       start_period: 10s
 
   tools:
-    image: ghcr.io/inp146/archivex:0.1.1
+    image: ghcr.io/inp146/archivex:0.1.2-rc1
     pull_policy: always
     profiles: ["tools"]
     command: ["archivex-data"]
