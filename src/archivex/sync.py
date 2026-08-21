@@ -8,7 +8,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from archivex.media import MediaDownloader
-from archivex.source import PostSource, SourceMedia, media_from_payload
+from archivex.source import (
+    AccountPoolUnavailableError,
+    PostSource,
+    SourceMedia,
+    media_from_payload,
+    TwscrapeResponseError,
+)
 from archivex.storage import ArchiveRepository, MediaInput, PostInput
 
 logger = logging.getLogger(__name__)
@@ -127,6 +133,30 @@ class ArchiveSyncService:
                 run_id, posts_seen=posts_seen, posts_new=posts_new, media_new=media_new,
                 status="interrupted", error="synchronization cancelled"
             )
+            raise
+        except AccountPoolUnavailableError as exc:
+            message = str(exc) or exc.__class__.__name__
+            self.repository.finish_sync_run(
+                run_id, posts_seen=posts_seen, posts_new=posts_new, media_new=media_new,
+                status="error", error=message
+            )
+            self.repository.mark_account_sync_error(x_user_id, message)
+            logger.warning("Crawler account pool unavailable for X user %s: %s", x_user_id, message)
+            # Preserve the retry-after hint for the queue middleware. Turning
+            # this into a plain AccountSyncResult would make every task fall
+            # back to the generic 30-second exponential retry schedule.
+            raise
+        except TwscrapeResponseError as exc:
+            message = str(exc) or exc.__class__.__name__
+            self.repository.finish_sync_run(
+                run_id, posts_seen=posts_seen, posts_new=posts_new, media_new=media_new,
+                status="error", error=message
+            )
+            self.repository.mark_account_sync_error(x_user_id, message)
+            logger.warning("Recoverable twscrape response error for X user %s: %s", x_user_id, message)
+            # Keep the exception typed so Taskiq's retry middleware can retry
+            # without converting a worker-wide GraphQL feature failure into a
+            # silent terminal result.
             raise
         except Exception as exc:
             message = str(exc) or exc.__class__.__name__

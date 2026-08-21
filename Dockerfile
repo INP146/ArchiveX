@@ -6,10 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY pyproject.toml README.md requirements.lock ./
-COPY src ./src
 
-RUN pip install --no-cache-dir -r requirements.lock \
-    && pip install --no-cache-dir --no-deps .
+RUN pip install --no-cache-dir -r requirements.lock
 
 RUN apt-get update \
     && apt-get install --no-install-recommends --yes gosu \
@@ -17,6 +15,9 @@ RUN apt-get update \
     && useradd --create-home --uid 10001 appuser \
     && mkdir -p /data \
     && chown appuser:appuser /data
+
+COPY src ./src
+RUN pip install --no-cache-dir --no-deps .
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh

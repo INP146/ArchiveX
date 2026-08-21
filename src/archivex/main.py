@@ -34,7 +34,11 @@ def create_app(settings: Settings | None = None, post_source: PostSource | None 
                task_dispatcher: SyncTaskDispatcher | None = None) -> FastAPI:
     app_settings = settings or get_settings()
     repository = ArchiveRepository(app_settings.archive_db_path, app_settings.archive_data_dir)
-    source = post_source or TwscrapePostSource(app_settings.twscrape_session_path)
+    source = post_source or TwscrapePostSource(
+        app_settings.twscrape_session_path,
+        wait_timeout=app_settings.twscrape_wait_timeout_seconds,
+        wait_interval=app_settings.twscrape_wait_interval_seconds,
+    )
     session_accounts = (
         session_account_manager
         or TwscrapeSessionAccountManager(app_settings.twscrape_session_path)

@@ -24,6 +24,14 @@ def test_process_specs_start_backend_only(tmp_path) -> None:
     assert by_name["media-worker"].env == {
         "TASK_WORKER_QUEUE_NAME": "archivex:media"
     }
+    assert by_name["crawl-worker"].command.count("--ack-type") == 1
+    assert by_name["media-worker"].command.count("--ack-type") == 1
+    assert by_name["crawl-worker"].command[
+        by_name["crawl-worker"].command.index("--ack-type") + 1
+    ] == "when_saved"
+    assert by_name["media-worker"].command[
+        by_name["media-worker"].command.index("--ack-type") + 1
+    ] == "when_saved"
     assert by_name["scheduler"].env == {
         "TASK_WORKER_QUEUE_NAME": "archivex:crawl"
     }

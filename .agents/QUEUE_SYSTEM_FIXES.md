@@ -1,5 +1,8 @@
 # ArchiveX 队列系统审查修复记录
 
+> 2026-08-21 Docker Desktop SQLite `SIGBUS`、consumer 心跳与 orphan pending
+> 的现场修复另见 `DOCKER_SQLITE_RECOVERY.md`。
+
 - 修复日期：2026-08-08 至 2026-08-09
 - 依据：`QUEUE_SYSTEM_REVIEW.md`
 - 基线测试：`59 passed, 1 warning`
@@ -52,7 +55,9 @@ readiness:       archive SQLite + Redis + worker/scheduler heartbeat + Stream pe
 ### Q-02 与 Q-08 统一生命周期模型
 
 - 删除 `MountedTaskiqAdminMiddleware`、挂载的 `/ops/tasks` 和 `taskiq-dashboard` 依赖，不再通过 HTTP 上报任务事件。
-- 新增本地 `TaskLifecycleMiddleware`，worker 直接写生命周期 SQLite；写入失败只记录异常，不阻止 broker publish 或业务执行。
+- 新增本地 `TaskLifecycleMiddleware`，worker 直接写生命周期 SQLite；入队和开始事件写入失败只记录异常，不阻止 broker publish 或业务执行；终态 `record_finished` 会短暂重试，最终失败则让 Taskiq 保留消息 pending，等待 reclaim 后重投，避免出现“Redis 成功但 SQLite 仍 in_progress”。
+- 自动重试先持久化 `retry_scheduled`，再创建 Redis time schedule；前者失败时不创建 schedule、不 ACK 原 Stream 消息，避免“Redis retry 已存在但 SQLite 仍 in_progress”。旧 attempt 或已有终态拒绝再次创建 retry。
+- retry schedule 使用 `<task_id>:retry:<retry_number>` 确定性 ID，并通过 Lua 以 `LREM -> RPUSH -> SET` 原子提交时间桶和 data key；data key 是最终提交标记。重复添加不会重复入桶，客户端响应丢失时会同时核验 data key 与时间桶，无法核验则保留原 Stream 消息 pending。
 - `queue_tasks` 保存逻辑任务，`queue_attempts` 保存每次执行尝试。自动重试保持同一逻辑任务 ID 并递增 attempt，手动重试创建新任务并通过 `retry_of` 关联来源。
 - queued/started/finished/retry 更新带 attempt 条件：同 attempt 的迟到事件不能把 completed/failure 降级，只有更高 attempt 能推进逻辑任务。
 - `record_finished` 和 `record_retry_scheduled` 可在 queued/started 全部丢失时补建任务与正确 attempt，不再依赖理想事件顺序。
@@ -91,6 +96,7 @@ Redis `XADD` 已提交但响应丢失时仍可能出现重复消息，这是分�
 - 新增 `/ready`，检查统一 Archive SQLite、Redis、crawl/media worker 与 scheduler heartbeat。
 - readiness 返回两个 Stream 的 consumer、lag、pending、最老 pending idle 时间和投递次数；超过任务 timeout 加 120 秒仍 pending 时报告 stalled。
 - readiness 同时统计独立 retry schedule，并在时间桶逾期仍有任务时报告 stalled，避免“Stream 为空但任务永远等待”的盲区。
+- `taskiq-redis 1.2.3` 无法解析带冒号 prefix 的过期时间桶；本地 schedule source 按完整 `archivex:retry-schedules:time:` 前缀解析，使错过当前分钟的 retry 能在下一轮恢复。
 - worker 与 scheduler 每 10 秒写入 TTL 30 秒的 owner heartbeat，优雅退出只删除自己持有的 key。
 - Compose 为三个进程增加 heartbeat healthcheck，但 API/worker 启动不以 `/ready` 互相依赖。
 
@@ -106,6 +112,8 @@ readiness 提供机器可读状态；告警规则和外部通知渠道仍需由�
 
 - 新增 `ReclaimingRedisStreamBroker`，每轮消费先尝试 `XAUTOCLAIM` 过期 pending，再阻塞等待新 Stream 消息。
 - reclaim 使用 Redis 所有权锁串行化；其他 worker 已持锁时直接跳过本轮，不阻塞正常消费。
+- consumer 心跳只用于 readiness 告警，不会在 40 秒后直接抢占仍可能运行的任务；
+  `XAUTOCLAIM` 仍遵守对应任务硬超时加保护期，避免重复抓取。
 - 回归测试验证：即使 `XREADGROUP` 没有任何新消息，broker 仍会先产出旧 consumer 的过期 pending。
 - 现场遗留的 2 条 pending 无需修改 Redis 数据；加载新 broker 的 worker 启动后会按原至少一次语义自动接管。
 
@@ -113,6 +121,7 @@ readiness 提供机器可读状态；告警规则和外部通知渠道仍需由�
 
 - `scripts/start_backend.py` 启动前扫描当前项目 `.venv/bin/taskiq` 的 worker/scheduler；发现任何存活实例就拒绝重复启动并列出 PID。
 - broker 的 `xread_count` 与 `unacknowledged_batch_size` 改为对应队列并发数：crawl 为 1，media 为 4。
+- 本地启动脚本和两份 Compose 显式固定 `--ack-type when_saved`，确保终态 SQLite 写入位于 Redis result 和 Stream ACK 之前。
 - 新增进程发现测试，确保其他项目的同名 Taskiq 进程不会被误判。
 
 ### 媒体子进程标准输入
@@ -120,6 +129,20 @@ readiness 提供机器可读状态；告警规则和外部通知渠道仍需由�
 - `gallery-dl` 子进程显式使用 `stdin=subprocess.DEVNULL`，不再继承已孤立 worker 的失效标准输入描述符。
 - 该修复针对任务 `f0b757aa-c02d-46de-afda-fd7f665d7211` 第 5/5 次失败中观察到的 `init_sys_streams` / `Bad file descriptor`。
 - 旧 worker 进程不会热加载此修改，必须在确认当前无运行任务后重启才会生效；本次修复过程未操作现有进程。
+
+### 2026-08-21 生命周期分叉与 retry 时间桶事故
+
+- 任务 `ca50197d-8f45-481a-b19b-07f6bd74c915` 实际于北京时间 `2026-08-21 00:11:17` 成功完成，但 SQLite 生命周期终态写入异常被吞，任务中心长期显示 `in_progress`；Redis result、同步运行和媒体结果均证明业务已经完成。
+- 修复前备份为 `/Users/user/Projects/docker/ArchiveX/data/backups/pre-task-repair-20260821T094550Z.sqlite3`；现场任务已依据 Redis 结构化成功结果恢复为 `completed`，没有重跑抓取，也没有启动、停止或重启容器。
+- 当前开发 Compose 的宿主入口是 `http://127.0.0.1:8400`，容器内部 API 是 `8000`；宿主 `8000` 属于另一项服务，不能用于判断 ArchiveX readiness。
+- 当前开发栈的 `8400/ready` 已无 overdue retry；历史部署目录的 `8300` 使用旧 GHCR Compose，不能与开发栈状态混用。
+
+### 2026-08-21 twscrape crawl 子进程锁恢复
+
+- Docker 现场的批次延迟来自 twscrape 唯一抓取账号被锁后，每个任务固定等待 30 秒；健康请求本身仍约 1 秒。
+- `TWSCRAPE_WAIT_TIMEOUT_SECONDS` 降为 0.5 秒，`AccountPoolUnavailableError` 携带最早解锁时间，所有受影响任务在同一时间点集中重试。
+- 适配器拦截 twscrape 0.19.2 的 GraphQL error 336 `exit(1)` 路径并释放请求上下文，避免 crawl 子进程无日志退出。
+- crawl 子进程持有 `accounts.db` 旁的 advisory lease；只有检测到上一个 lease 是非正常退出且当前没有其他持有者时才清理 ownerless locks，正常停止保留真实 rate-limit lock。详见 `TWSCRAPE_WORKER_RECOVERY.md`。
 
 ## 4. 验证
 
@@ -129,6 +152,6 @@ readiness 提供机器可读状态；告警规则和外部通知渠道仍需由�
 .venv/bin/pytest -q
 ```
 
-结果：`77 passed, 1 warning`。warning 来自现有 FastAPI TestClient 对 `httpx` 的弃用提示，与本次队列改动无关。
+最新结果：`128 passed, 1 warning`。warning 来自现有 FastAPI TestClient 对 `httpx` 的弃用提示，与本次队列改动无关。
 
 另外执行了 Python 全量语法编译、`git diff --check`、Compose 配置解析和前端生产构建。验证过程中没有启动、停止或重启现有 API、worker、scheduler、Redis 或 Vite 进程。

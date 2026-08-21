@@ -83,7 +83,14 @@ def find_existing_queue_processes(root: Path) -> list[ExistingProcess]:
 
 def build_process_specs(root: Path, venv_bin: Path) -> tuple[ProcessSpec, ...]:
     taskiq = str(venv_bin / "taskiq")
-    worker_base = ("worker", "archivex.tasks:broker", "--workers", "1")
+    worker_base = (
+        "worker",
+        "archivex.tasks:broker",
+        "--workers",
+        "1",
+        "--ack-type",
+        "when_saved",
+    )
     return (
         ProcessSpec("api", (str(venv_bin / "archivex"),), root),
         ProcessSpec(

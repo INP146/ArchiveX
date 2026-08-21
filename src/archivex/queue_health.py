@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL_SECONDS = 10
 HEARTBEAT_TTL_SECONDS = 30
+DEAD_CONSUMER_GRACE_SECONDS = HEARTBEAT_TTL_SECONDS + HEARTBEAT_INTERVAL_SECONDS
+LONG_RUNNING_RECLAIM_MARGIN_SECONDS = 60
 WORKER_CONSUMER_GROUP = "archivex-workers"
 _SERVICE_ROLES = ("crawl-worker", "media-worker", "scheduler")
 _DELETE_OWNED_HEARTBEAT = """
@@ -38,6 +40,10 @@ def heartbeat_key(role: str) -> str:
     return f"archivex:heartbeat:{role}"
 
 
+def consumer_heartbeat_key(stream: str, consumer: str) -> str:
+    return f"archivex:consumer-heartbeat:{stream}:{consumer}"
+
+
 class QueueServiceHeartbeatMiddleware(TaskiqMiddleware):
     """Publish expiring process heartbeats without affecting queue operations."""
 
@@ -46,6 +52,8 @@ class QueueServiceHeartbeatMiddleware(TaskiqMiddleware):
         self.settings = settings
         self.owner = str(uuid.uuid4())
         self.role: str | None = None
+        self.stream: str | None = None
+        self.consumer: str | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
 
     async def startup(self) -> None:
@@ -53,6 +61,8 @@ class QueueServiceHeartbeatMiddleware(TaskiqMiddleware):
             self.role = "scheduler"
         elif self.broker.is_worker_process:
             queue_name = getattr(self.broker, "queue_name", self.settings.task_worker_queue_name)
+            self.stream = str(queue_name)
+            self.consumer = str(getattr(self.broker, "consumer_name"))
             self.role = (
                 "media-worker"
                 if queue_name == self.settings.task_media_queue_name
@@ -73,12 +83,16 @@ class QueueServiceHeartbeatMiddleware(TaskiqMiddleware):
             return
         client = self._redis()
         try:
-            await client.eval(
-                _DELETE_OWNED_HEARTBEAT,
-                1,
-                heartbeat_key(self.role),
-                self.owner,
-            )
+            keys = [heartbeat_key(self.role)]
+            if self.stream is not None and self.consumer is not None:
+                keys.append(consumer_heartbeat_key(self.stream, self.consumer))
+            for key in keys:
+                await client.eval(
+                    _DELETE_OWNED_HEARTBEAT,
+                    1,
+                    key,
+                    self.owner,
+                )
         except Exception:
             logger.warning("Could not clear %s heartbeat during shutdown", self.role, exc_info=True)
         finally:
@@ -97,6 +111,12 @@ class QueueServiceHeartbeatMiddleware(TaskiqMiddleware):
                         self.owner,
                         ex=HEARTBEAT_TTL_SECONDS,
                     )
+                    if self.stream is not None and self.consumer is not None:
+                        await client.set(
+                            consumer_heartbeat_key(self.stream, self.consumer),
+                            self.owner,
+                            ex=HEARTBEAT_TTL_SECONDS,
+                        )
                 finally:
                     await client.aclose()
             except asyncio.CancelledError:
@@ -229,6 +249,33 @@ class SystemReadinessProbe:
             "consumers": int(group.get("consumers") or 0),
         }
         if pending:
+            consumers = await client.xinfo_consumers(
+                stream,
+                WORKER_CONSUMER_GROUP,
+            )
+            pending_consumers = [
+                item for item in consumers if int(item.get("pending") or 0) > 0
+            ]
+            heartbeat_keys = [
+                consumer_heartbeat_key(stream, _redis_text(item.get("name")))
+                for item in pending_consumers
+            ]
+            heartbeat_values = await client.mget(heartbeat_keys) if heartbeat_keys else []
+            dead_consumer_after_ms = DEAD_CONSUMER_GRACE_SECONDS * 1000
+            orphaned_pending = sum(
+                int(item.get("pending") or 0)
+                for item, heartbeat in zip(
+                    pending_consumers,
+                    heartbeat_values,
+                    strict=True,
+                )
+                if heartbeat is None and int(item.get("idle") or 0) >= dead_consumer_after_ms
+            )
+            metrics["orphaned_pending"] = orphaned_pending
+            if orphaned_pending:
+                metrics["status"] = "stalled"
+                issues.append(f"{stream} has pending tasks owned by inactive consumers")
+
             oldest = await client.xpending_range(
                 stream,
                 WORKER_CONSUMER_GROUP,
@@ -242,7 +289,9 @@ class SystemReadinessProbe:
                 metrics["oldest_pending_deliveries"] = int(
                     oldest[0].get("times_delivered") or 0
                 )
-                stale_after_ms = (task_timeout_seconds + 120) * 1000
+                stale_after_ms = (
+                    task_timeout_seconds + LONG_RUNNING_RECLAIM_MARGIN_SECONDS
+                ) * 1000
                 stalled = await client.xpending_range(
                     stream,
                     WORKER_CONSUMER_GROUP,
@@ -303,3 +352,7 @@ def _check_sqlite_read_write(path: Path) -> None:
         connection.execute("BEGIN IMMEDIATE")
         connection.execute("SELECT 1")
         connection.rollback()
+
+
+def _redis_text(value: Any) -> str:
+    return value.decode() if isinstance(value, bytes) else str(value)

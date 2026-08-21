@@ -286,7 +286,7 @@ class TaskCenterRepository:
         worker: str = "unknown",
         args: list[Any] | None = None,
         kwargs: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
         normalized_id = self._required_task_id(task_id)
         timestamp = _sqlite_timestamp(finished_at) if finished_at else _now()
         attempt = _attempt_number(labels)
@@ -295,6 +295,18 @@ class TaskCenterRepository:
         serialized = _serialize_message(args or [], kwargs or {}, labels)
 
         with self._write() as connection:
+            current = connection.execute(
+                "SELECT current_attempt, status FROM queue_tasks WHERE id = ?",
+                (normalized_id,),
+            ).fetchone()
+            if current is not None and (
+                int(current["current_attempt"]) > attempt
+                or (
+                    int(current["current_attempt"]) == attempt
+                    and str(current["status"]) in TERMINAL_TASK_STATUSES
+                )
+            ):
+                return False
             metadata = self._task_metadata(connection, name, labels)
             self._ensure_task(
                 connection,
@@ -307,6 +319,41 @@ class TaskCenterRepository:
                 _max_attempts(labels),
                 metadata,
             )
+            cursor = connection.execute(
+                """UPDATE queue_tasks SET
+                    name = ?, worker = ?, args = ?, kwargs = ?, labels = ?,
+                    status = ?, result = ?, error = ?,
+                    queued_at = CASE WHEN current_attempt < ? THEN NULL ELSE queued_at END,
+                    started_at = CASE WHEN current_attempt < ? THEN NULL ELSE started_at END,
+                    finished_at = ?, next_retry_at = NULL,
+                    current_attempt = MAX(current_attempt, ?),
+                    max_attempts = MAX(max_attempts, ?),
+                    updated_at = MAX(updated_at, ?)
+                WHERE id = ? AND current_attempt <= ?
+                    AND NOT (
+                        current_attempt = ?
+                        AND status IN ('completed', 'failure', 'abandoned')
+                    )""",
+                (
+                    name,
+                    worker,
+                    *serialized,
+                    status,
+                    result_json,
+                    error,
+                    attempt,
+                    attempt,
+                    timestamp,
+                    attempt,
+                    _max_attempts(labels),
+                    timestamp,
+                    normalized_id,
+                    attempt,
+                    attempt,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return False
             connection.execute(
                 """INSERT INTO queue_attempts (
                     task_id, attempt, status, labels, result, error, finished_at, updated_at
@@ -330,34 +377,7 @@ class TaskCenterRepository:
                     timestamp,
                 ),
             )
-            connection.execute(
-                """UPDATE queue_tasks SET
-                    name = ?, worker = ?, args = ?, kwargs = ?, labels = ?,
-                    status = ?, result = ?, error = ?,
-                    queued_at = CASE WHEN current_attempt < ? THEN NULL ELSE queued_at END,
-                    started_at = CASE WHEN current_attempt < ? THEN NULL ELSE started_at END,
-                    finished_at = ?, next_retry_at = NULL,
-                    current_attempt = MAX(current_attempt, ?),
-                    max_attempts = MAX(max_attempts, ?),
-                    updated_at = MAX(updated_at, ?)
-                WHERE id = ? AND current_attempt <= ?""",
-                (
-                    name,
-                    worker,
-                    *serialized,
-                    status,
-                    result_json,
-                    error,
-                    attempt,
-                    attempt,
-                    timestamp,
-                    attempt,
-                    _max_attempts(labels),
-                    timestamp,
-                    normalized_id,
-                    attempt,
-                ),
-            )
+        return True
 
     def record_retry_scheduled(
         self,
@@ -370,7 +390,7 @@ class TaskCenterRepository:
         worker: str = "unknown",
         args: list[Any] | None = None,
         kwargs: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
         normalized_id = self._required_task_id(task_id)
         timestamp = _sqlite_timestamp(finished_at) if finished_at else _now()
         retry_at = _sqlite_timestamp(next_retry_at)
@@ -390,6 +410,18 @@ class TaskCenterRepository:
                 _max_attempts(labels),
                 metadata,
             )
+            current = connection.execute(
+                "SELECT current_attempt, status FROM queue_tasks WHERE id = ?",
+                (normalized_id,),
+            ).fetchone()
+            if current is not None and (
+                int(current["current_attempt"]) > attempt
+                or (
+                    int(current["current_attempt"]) == attempt
+                    and str(current["status"]) in TERMINAL_TASK_STATUSES
+                )
+            ):
+                return False
             connection.execute(
                 """INSERT OR IGNORE INTO queue_attempts (
                     task_id, attempt, status, labels, updated_at
@@ -430,6 +462,7 @@ class TaskCenterRepository:
                     attempt,
                 ),
             )
+        return True
 
     def record_publish_failed(
         self,

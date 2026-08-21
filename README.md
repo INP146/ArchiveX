@@ -40,15 +40,24 @@ docker compose up --build
 
 This starts the frontend, API, Redis, both workers, and the scheduler. No
 separate Python, Node.js, or `.env` setup is required. Open
-`http://localhost:8000` and sign in with the Compose authentication token. The
+`http://localhost:8400` and sign in with the Compose authentication token. The
 example token is `change-me-before-production`; change `WEB_AUTH_TOKEN` in
 `docker-compose.yml` before exposing ArchiveX outside a trusted local network.
 
-The repository-root `./data` directory is mounted at `/data` in the Python
-containers and holds the SQLite databases, archive files, and twscrape session
-data. Redis queue data uses the Compose-managed `redis_data` volume. The
-backend image prepares its own data paths and then runs ArchiveX as an
-unprivileged user. Keep both stores when recreating containers.
+SQLite WAL files and twscrape session state live in the Compose-managed
+`state_data` volume on Docker's Linux filesystem. Archived media remains
+visible on the host under `./data/archive`; it is mounted over
+`/data/archive` inside the state volume. On the first start after upgrading,
+the `state-migrate` init service uses SQLite's backup API to copy
+`./data/archive.sqlite3` and `./data/twscrape/accounts.db` into `state_data`.
+The old host files are not modified or deleted. Redis queue data uses the
+separate `redis_data` volume.
+
+Stop the old foreground stack before the first start with this layout. Never
+use `docker compose down -v` for routine cleanup: `-v` deletes both named
+volumes, including the primary SQLite state. The verified migration and
+rollback procedure is documented in
+[`.agents/DOCKER_SQLITE_RECOVERY.md`](.agents/DOCKER_SQLITE_RECOVERY.md).
 
 ## Configuration
 
@@ -122,7 +131,7 @@ scheduler      the single Taskiq scheduler
 ```
 
 After signing in to ArchiveX, use **任务中心** in the Web sidebar. In Compose it
-is available at `http://localhost:8000/tasks`; local Vite development uses
+is available at `http://localhost:8400/tasks`; local Vite development uses
 `http://localhost:5173/tasks`. The integrated page shows logical tasks and every
 execution attempt, including queued, running, waiting-to-retry, completed,
 failed, and abandoned states. Manual retries create a new task linked to their
@@ -167,7 +176,7 @@ copy the value from an authenticated request's `Cookie` header, and paste it
 directly into the form. Treat it like a password: use HTTPS for any non-local
 deployment, never put it in chat or shell history, and rotate the session in
 Settings when it expires. The ArchiveX web service stores it only in the
-persistent `./data/twscrape/accounts.db` file and never displays it again.
+Docker `state_data` volume and never displays it again.
 
 These crawler login accounts are separate from the public X accounts added on
 the account-management page.
@@ -207,6 +216,10 @@ packages are private, log in to `ghcr.io` before pulling.
 
 Use `docker compose run --rm tools backup` to create a verified archive under
 `backups/`; the maintenance command runs entirely from the Docker image.
+The restore command must target a stopped host directory. It deliberately
+rejects `/data` when that path is a Docker named-volume mountpoint, because a
+mountpoint cannot be atomically replaced; restore to a host staging directory
+and run the documented state migration instead.
 Restore and upgrade procedures, security requirements, known limitations, and
 the stable-release checklist are documented in
 [`.agents/RELEASE_V0.1.1.md`](.agents/RELEASE_V0.1.1.md).

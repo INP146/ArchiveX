@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import tarfile
@@ -16,6 +17,7 @@ from typing import Sequence
 
 DATABASE_PATHS = (Path("archive.sqlite3"), Path("twscrape/accounts.db"))
 OWNER_MARKER = Path(".archivex-owner-10001")
+MEDIA_OWNER_MARKER = ".archivex-media-owner-10001"
 MANIFEST_NAME = "manifest.json"
 
 
@@ -93,6 +95,11 @@ def verify_backup(backup: Path) -> dict[str, object]:
 
 def restore_backup(backup: Path, target: Path, replace: bool = False) -> Path | None:
     target = target.resolve()
+    if target.exists() and (os.path.ismount(target) or target.is_mount()):
+        raise ValueError(
+            f"Cannot replace Docker mountpoint in place: {target}; "
+            "restore to a stopped host directory, then run the state migration"
+        )
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="archivex-restore-", dir=target.parent) as temporary:
         extracted = Path(temporary)
@@ -150,7 +157,11 @@ def _sha256(path: Path) -> str:
 
 
 def _skip_live_file(relative_path: Path) -> bool:
-    if relative_path in DATABASE_PATHS or relative_path == OWNER_MARKER:
+    if (
+        relative_path in DATABASE_PATHS
+        or relative_path == OWNER_MARKER
+        or relative_path.name == MEDIA_OWNER_MARKER
+    ):
         return True
     return relative_path.name.endswith(("-wal", "-shm"))
 

@@ -8,7 +8,6 @@ from redis.asyncio import Redis
 from taskiq import AckableMessage
 from taskiq_redis import RedisStreamBroker
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -18,12 +17,17 @@ class ReclaimingRedisStreamBroker(RedisStreamBroker):
     async def listen(self) -> AsyncGenerator[AckableMessage, None]:
         async with Redis(connection_pool=self.connection_pool) as redis_conn:
             while True:
+                reclaimed = False
                 for stream in [self.queue_name, *self.additional_streams.keys()]:
-                    for msg_id, message in await self._reclaim_pending(redis_conn, stream):
+                    pending = await self._reclaim_pending(redis_conn, stream)
+                    reclaimed = reclaimed or bool(pending)
+                    for msg_id, message in pending:
                         yield AckableMessage(
                             data=message[b"data"],
                             ack=self._ack_generator(id=msg_id, queue_name=stream),
                         )
+                if reclaimed:
+                    continue
 
                 fetched = await redis_conn.xreadgroup(
                     self.consumer_group_name,

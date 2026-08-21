@@ -2,6 +2,7 @@ import sqlite3
 
 import pytest
 
+import archivex.data_backup as data_backup
 from archivex.data_backup import create_backup, restore_backup, verify_backup
 
 
@@ -54,3 +55,15 @@ def test_restore_preserves_existing_data_when_replace_is_explicit(tmp_path) -> N
     assert previous is not None
     assert (previous / "existing.txt").read_text() == "old"
     assert _value(target / "archive.sqlite3") == "new"
+
+
+def test_restore_rejects_a_docker_mountpoint(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    _database(source / "archive.sqlite3", "new")
+    backup = create_backup(source, tmp_path / "backup.tar.gz")
+    target = tmp_path / "data"
+    target.mkdir()
+    monkeypatch.setattr(data_backup.os.path, "ismount", lambda path: str(path) == str(target))
+
+    with pytest.raises(ValueError, match="mountpoint"):
+        restore_backup(backup, target, replace=True)

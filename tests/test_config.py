@@ -23,6 +23,29 @@ def test_web_auth_username_is_normalized() -> None:
     assert settings.web_auth_username == "archive_admin"
 
 
+def test_twscrape_pool_wait_settings_are_bounded() -> None:
+    settings = Settings(
+        _env_file=None,
+        archive_db_path="/tmp/archive.sqlite3",
+        archive_data_dir="/tmp/archive",
+        web_auth_token="test-token",
+        twscrape_wait_timeout_seconds=0,
+        twscrape_wait_interval_seconds=0.25,
+    )
+
+    assert settings.twscrape_wait_timeout_seconds == 0
+    assert settings.twscrape_wait_interval_seconds == 0.25
+
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            archive_db_path="/tmp/archive.sqlite3",
+            archive_data_dir="/tmp/archive",
+            web_auth_token="test-token",
+            twscrape_wait_interval_seconds=0,
+        )
+
+
 def test_dedupe_ttl_must_cover_task_timeout_retry_and_reclaim_margin() -> None:
     with pytest.raises(ValidationError, match="task_dedupe_ttl_seconds must be at least 360"):
         Settings(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import faulthandler
 import logging
 import time
 import uuid
@@ -9,7 +10,8 @@ from functools import lru_cache
 from typing import Any
 
 from redis.asyncio import Redis
-from taskiq import Context, TaskiqDepends, TaskiqMiddleware, TaskiqScheduler
+from taskiq import Context, ScheduledTask, TaskiqDepends, TaskiqMiddleware, TaskiqScheduler
+from taskiq.compat import model_dump, model_validate
 from taskiq.exceptions import NoResultError
 from taskiq.kicker import AsyncKicker
 from taskiq.message import TaskiqMessage
@@ -21,8 +23,11 @@ from taskiq_redis import ListRedisScheduleSource, RedisAsyncResultBackend
 from archivex.config import Settings, get_settings
 from archivex.media import GalleryDlMediaDownloader, PermanentMediaDownloadError
 from archivex.queue_broker import ReclaimingRedisStreamBroker
-from archivex.queue_health import QueueServiceHeartbeatMiddleware
-from archivex.source import TwscrapePostSource
+from archivex.queue_health import (
+    LONG_RUNNING_RECLAIM_MARGIN_SECONDS,
+    QueueServiceHeartbeatMiddleware,
+)
+from archivex.source import AccountPoolUnavailableError, TwscrapePostSource
 from archivex.storage import ArchiveRepository
 from archivex.sync import ArchiveSyncService
 from archivex.task_center import (
@@ -35,6 +40,7 @@ from archivex.task_center import (
 from archivex.task_dispatcher import TaskSubmission
 
 logger = logging.getLogger(__name__)
+faulthandler.enable()
 settings = get_settings()
 
 _REDIS_SOCKET_TIMEOUT_SECONDS = 5
@@ -49,6 +55,31 @@ _SCHEDULE_DISPATCH_LEASE_SECONDS = 300
 _SCHEDULE_DUE_TOLERANCE_SECONDS = 1
 _SCHEDULE_DISPATCH_LEASE_KEY = "archivex:schedule:enabled-accounts:lease"
 _SCHEDULE_LAST_DISPATCH_KEY = "archivex:schedule:enabled-accounts:last-dispatched-at"
+_LIFECYCLE_WRITE_ATTEMPTS = 3
+_LIFECYCLE_WRITE_RETRY_DELAY_SECONDS = 0.1
+
+_ADD_TIME_SCHEDULE = """
+if redis.call('exists', KEYS[1]) == 1 then
+    if redis.call('lpos', KEYS[2], ARGV[2]) == false then
+        redis.call('rpush', KEYS[2], ARGV[2])
+    end
+    return 0
+end
+redis.call('lrem', KEYS[2], 0, ARGV[2])
+redis.call('rpush', KEYS[2], ARGV[2])
+redis.call('set', KEYS[1], ARGV[1])
+return 1
+"""
+
+_CONTAINS_TIME_SCHEDULE = """
+if redis.call('exists', KEYS[1]) == 0 then
+    return 0
+end
+if redis.call('lpos', KEYS[2], ARGV[1]) == false then
+    return 0
+end
+return 1
+"""
 
 _DELETE_OWNED_LOCK = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
@@ -74,6 +105,102 @@ return 0
 """
 
 
+class NamespacedRedisScheduleSource(ListRedisScheduleSource):
+    """Store retries atomically and parse overdue namespaced time buckets."""
+
+    async def add_schedule(self, schedule: ScheduledTask) -> None:
+        if schedule.time is None:
+            await super().add_schedule(schedule)
+            return
+        async with Redis(connection_pool=self._connection_pool) as client:
+            await client.eval(
+                _ADD_TIME_SCHEDULE,
+                2,
+                self._get_data_key(schedule.schedule_id),
+                self._get_time_key(schedule.time),
+                self._serializer.dumpb(model_dump(schedule)),
+                schedule.schedule_id,
+            )
+
+    async def get_schedule(self, schedule_id: str) -> ScheduledTask | None:
+        async with Redis(connection_pool=self._connection_pool) as client:
+            raw_schedule = await client.get(self._get_data_key(schedule_id))
+        if raw_schedule is None:
+            return None
+        return model_validate(
+            ScheduledTask,
+            self._serializer.loadb(raw_schedule),
+        )
+
+    async def contains_schedule(
+        self,
+        schedule_id: str,
+        target_time: datetime.datetime,
+    ) -> bool:
+        async with Redis(connection_pool=self._connection_pool) as client:
+            return bool(await client.eval(
+                _CONTAINS_TIME_SCHEDULE,
+                2,
+                self._get_data_key(schedule_id),
+                self._get_time_key(target_time),
+                schedule_id,
+            ))
+
+    def _parse_time_key(self, key: str) -> datetime.datetime | None:
+        marker = f"{self._prefix}:time:"
+        if not key.startswith(marker):
+            return None
+        try:
+            return datetime.datetime.strptime(
+                key[len(marker):],
+                "%Y-%m-%dT%H:%M",
+            ).replace(tzinfo=datetime.UTC)
+        except ValueError:
+            logger.debug("Failed to parse retry schedule time key %s", key)
+            return None
+
+
+async def _record_lifecycle_event(
+    method: str,
+    *args: Any,
+    required: bool = False,
+    **kwargs: Any,
+) -> Any:
+    for attempt in range(1, _LIFECYCLE_WRITE_ATTEMPTS + 1):
+        try:
+            repository = _task_center_repository()
+            return await asyncio.to_thread(
+                getattr(repository, method),
+                *args,
+                **kwargs,
+            )
+        except Exception:
+            if not required:
+                logger.warning(
+                    "Could not persist task lifecycle event %s",
+                    method,
+                    exc_info=True,
+                )
+                return
+            if attempt >= _LIFECYCLE_WRITE_ATTEMPTS:
+                logger.error(
+                    "Required task lifecycle event %s failed after %d attempts",
+                    method,
+                    attempt,
+                    exc_info=True,
+                )
+                raise
+            logger.warning(
+                "Could not persist required task lifecycle event %s; "
+                "retrying (%d/%d)",
+                method,
+                attempt,
+                _LIFECYCLE_WRITE_ATTEMPTS - 1,
+                exc_info=True,
+            )
+            await asyncio.sleep(_LIFECYCLE_WRITE_RETRY_DELAY_SECONDS * attempt)
+
+
 class TaskLifecycleMiddleware(TaskiqMiddleware):
     """Persist monotonic task-attempt transitions after broker operations."""
 
@@ -81,12 +208,19 @@ class TaskLifecycleMiddleware(TaskiqMiddleware):
     def _now_iso() -> str:
         return datetime.datetime.now(datetime.UTC).isoformat()
 
-    async def _record(self, method: str, *args: Any, **kwargs: Any) -> None:
-        try:
-            repository = _task_center_repository()
-            await asyncio.to_thread(getattr(repository, method), *args, **kwargs)
-        except Exception:
-            logger.warning("Could not persist task lifecycle event %s", method, exc_info=True)
+    async def _record(
+        self,
+        method: str,
+        *args: Any,
+        required: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        await _record_lifecycle_event(
+            method,
+            *args,
+            required=required,
+            **kwargs,
+        )
 
     async def post_send(self, message: TaskiqMessage) -> None:
         await self._record(
@@ -129,6 +263,7 @@ class TaskLifecycleMiddleware(TaskiqMiddleware):
             "record_finished",
             message.task_id,
             message.labels,
+            required=True,
             result=result.return_value,
             error=None if result.error is None else repr(result.error),
             finished_at=self._now_iso(),
@@ -168,8 +303,31 @@ class ResilientSmartRetryMiddleware(SmartRetryMiddleware):
             await _release_failed_retry_lock(message)
             return
 
-        delay = self.make_delay(message, retries)
+        pool_retry_after = (
+            exception.retry_after_seconds
+            if isinstance(exception, AccountPoolUnavailableError)
+            else None
+        )
+        if pool_retry_after is not None:
+            # Every account task should wake up together when the pool lock is
+            # expected to expire. This prevents N tasks from each sleeping for
+            # the normal 30-second retry interval while the queue is blocked.
+            delay = min(
+                max(1.0, float(pool_retry_after) + 1.0),
+                self.max_delay_exponent,
+            )
+        else:
+            delay = self.make_delay(message, retries)
         target_time = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=delay)
+        schedule_id = f"{message.task_id}:retry:{retries}"
+        if isinstance(self.schedule_source, NamespacedRedisScheduleSource):
+            existing_schedule = await self.schedule_source.get_schedule(schedule_id)
+            if existing_schedule is not None:
+                if existing_schedule.time is None:
+                    raise RuntimeError(
+                        f"Retry schedule {schedule_id} is not time-based"
+                    )
+                target_time = existing_schedule.time
         kicker = (
             AsyncKicker(
                 task_name=message.task_name,
@@ -177,8 +335,34 @@ class ResilientSmartRetryMiddleware(SmartRetryMiddleware):
                 labels=dict(message.labels),
             )
             .with_task_id(message.task_id)
+            .with_schedule_id(schedule_id)
             .with_labels(_retries=retries)
         )
+
+        # Commit the observable retry state before publishing the schedule. If
+        # this write fails, the original Stream message remains pending and no
+        # duplicate retry schedule has been created.
+        retry_recorded = await _record_lifecycle_event(
+            "record_retry_scheduled",
+            message.task_id,
+            message.labels,
+            repr(exception),
+            target_time.isoformat(),
+            required=True,
+            name=message.task_name,
+            worker=str(message.labels.get("queue_name", settings.task_worker_queue_name)),
+            args=message.args,
+            kwargs=message.kwargs,
+        )
+        if retry_recorded is False:
+            logger.info(
+                "Skipping stale retry for task %s attempt %d",
+                message.task_id,
+                retries,
+            )
+            result.labels["_archivex_retry_scheduled"] = True
+            result.error = NoResultError()
+            return
         try:
             async with asyncio.timeout(_RETRY_SCHEDULE_TIMEOUT_SECONDS):
                 if self.schedule_source is None:
@@ -194,6 +378,26 @@ class ResilientSmartRetryMiddleware(SmartRetryMiddleware):
                         **message.kwargs,
                     )
         except Exception as retry_error:
+            if isinstance(self.schedule_source, NamespacedRedisScheduleSource):
+                try:
+                    schedule_persisted = await self.schedule_source.contains_schedule(
+                        schedule_id,
+                        target_time,
+                    )
+                except Exception as verification_error:
+                    raise RuntimeError(
+                        f"{exception}; retry scheduling outcome could not be verified: "
+                        f"{verification_error.__class__.__name__}: "
+                        f"{str(verification_error) or 'unknown error'}"
+                    ) from retry_error
+                if schedule_persisted:
+                    logger.warning(
+                        "Retry schedule %s was persisted despite a lost response",
+                        schedule_id,
+                    )
+                    result.labels["_archivex_retry_scheduled"] = True
+                    result.error = NoResultError()
+                    return
             logger.exception(
                 "Could not schedule retry for task %s; finishing the attempt as failed",
                 message.task_id,
@@ -205,24 +409,6 @@ class ResilientSmartRetryMiddleware(SmartRetryMiddleware):
             await _release_failed_retry_lock(message)
             return
 
-        try:
-            await asyncio.to_thread(
-                _task_center_repository().record_retry_scheduled,
-                message.task_id,
-                message.labels,
-                repr(exception),
-                target_time.isoformat(),
-                name=message.task_name,
-                worker=str(message.labels.get("queue_name", settings.task_worker_queue_name)),
-                args=message.args,
-                kwargs=message.kwargs,
-            )
-        except Exception:
-            logger.warning(
-                "Could not persist retry schedule for task %s",
-                message.task_id,
-                exc_info=True,
-            )
         result.labels["_archivex_retry_scheduled"] = True
         result.error = NoResultError()
 
@@ -232,7 +418,7 @@ result_backend = RedisAsyncResultBackend(
     result_ex_time=settings.task_result_ttl_seconds,
     **_REDIS_CONNECTION_KWARGS,
 )
-retry_schedule_source = ListRedisScheduleSource(
+retry_schedule_source = NamespacedRedisScheduleSource(
     settings.task_redis_url,
     prefix="archivex:retry-schedules",
     **_REDIS_CONNECTION_KWARGS,
@@ -252,7 +438,7 @@ broker = ReclaimingRedisStreamBroker(
     url=settings.task_redis_url,
     queue_name=settings.task_worker_queue_name,
     consumer_group_name="archivex-workers",
-    idle_timeout=(_worker_timeout + 60) * 1000,
+    idle_timeout=(_worker_timeout + LONG_RUNNING_RECLAIM_MARGIN_SECONDS) * 1000,
     unacknowledged_lock_timeout=30,
     unacknowledged_batch_size=_worker_concurrency,
     xread_count=_worker_concurrency,
@@ -636,7 +822,12 @@ async def sync_account_task(
         return {"status": "skipped", "reason": "duplicate", "x_user_id": x_user_id}
 
     repository = _repository()
-    source = TwscrapePostSource(settings.twscrape_session_path)
+    source = TwscrapePostSource(
+        settings.twscrape_session_path,
+        wait_timeout=settings.twscrape_wait_timeout_seconds,
+        wait_interval=settings.twscrape_wait_interval_seconds,
+        recover_stale_locks=True,
+    )
     service = ArchiveSyncService(
         repository,
         source,

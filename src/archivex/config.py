@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     twscrape_session_path: Path = Path("/data/twscrape")
+    twscrape_wait_timeout_seconds: float = Field(default=0.5, ge=0, le=60)
+    twscrape_wait_interval_seconds: float = Field(default=0.25, gt=0, le=10)
     archive_db_path: Path = Path("/data/archive.sqlite3")
     archive_data_dir: Path = Path("/data/archive")
     archive_initial_post_limit: int = Field(default=-1, ge=-1)

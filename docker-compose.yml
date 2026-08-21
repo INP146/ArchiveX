@@ -1,5 +1,9 @@
+name: archivex-build
+
 x-archivex-environment: &archivex-environment
   TWSCRAPE_SESSION_PATH: /data/twscrape
+  TWSCRAPE_WAIT_TIMEOUT_SECONDS: "0.5"
+  TWSCRAPE_WAIT_INTERVAL_SECONDS: "0.25"
   ARCHIVE_DB_PATH: /data/archive.sqlite3
   ARCHIVE_DATA_DIR: /data/archive
   ARCHIVE_INITIAL_POST_LIMIT: "-1"
@@ -34,11 +38,29 @@ x-archivex-service: &archivex-service
   build: .
   image: archivex:local
   volumes:
-    - ./data:/data
+    - state_data:/data
+    - ./data/archive:/data/archive
   environment: *archivex-environment
   restart: unless-stopped
 
 services:
+  state-migrate:
+    build: .
+    image: archivex:local
+    # The legacy bind mount can be mode 0700/0600 on the host. This one-shot
+    # copier must read it as root; application containers still run as appuser.
+    user: "0:0"
+    entrypoint: ["python", "-m", "archivex.docker_state"]
+    command:
+      - --source
+      - /legacy-data
+      - --target
+      - /data
+    volumes:
+      - state_data:/data
+      - ./data:/legacy-data:ro
+    restart: "no"
+
   redis:
     image: redis:8-alpine@sha256:978f0e01593e65eed801f2402944efcd936d43b5027e4908a7897baf88ed6241
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
@@ -53,6 +75,9 @@ services:
 
   archivex:
     <<: *archivex-service
+    depends_on:
+      state-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 5s
@@ -63,7 +88,7 @@ services:
     build: ./frontend
     image: archivex-web:local
     ports:
-      - "8000:80"
+      - "8400:80"
     depends_on:
       archivex:
         condition: service_healthy
@@ -82,6 +107,8 @@ services:
       - archivex.tasks:broker
       - --workers
       - "1"
+      - --ack-type
+      - when_saved
       - --max-async-tasks
       - "1"
       - --max-prefetch
@@ -92,6 +119,8 @@ services:
       <<: *archivex-environment
       TASK_WORKER_QUEUE_NAME: archivex:crawl
     depends_on:
+      state-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -109,6 +138,8 @@ services:
       - archivex.tasks:broker
       - --workers
       - "1"
+      - --ack-type
+      - when_saved
       - --max-async-tasks
       - "4"
       - --max-prefetch
@@ -119,6 +150,8 @@ services:
       <<: *archivex-environment
       TASK_WORKER_QUEUE_NAME: archivex:media
     depends_on:
+      state-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -135,6 +168,8 @@ services:
       <<: *archivex-environment
       TASK_WORKER_QUEUE_NAME: archivex:crawl
     depends_on:
+      state-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -148,11 +183,14 @@ services:
     build: .
     image: archivex:local
     profiles: ["tools"]
-    entrypoint: ["archivex-data"]
-    working_dir: /workspace
+    command: ["archivex-data"]
+    working_dir: /
     volumes:
-      - .:/workspace
+      - state_data:/data
+      - ./data/archive:/data/archive
+      - ./backups:/backups
     restart: "no"
 
 volumes:
   redis_data:
+  state_data:

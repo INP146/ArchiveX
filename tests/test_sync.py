@@ -7,7 +7,13 @@ import sqlite3
 import pytest
 
 from archivex.media import DownloadResult
-from archivex.source import SourceAccount, SourceMedia, SourcePost
+from archivex.source import (
+    AccountPoolUnavailableError,
+    SourceAccount,
+    SourceMedia,
+    SourcePost,
+    TwscrapeResponseError,
+)
 from archivex.storage import ArchiveRepository, PostInput, initialize_storage
 from archivex.sync import ArchiveSyncService
 
@@ -118,6 +124,43 @@ def test_account_failures_do_not_stop_later_accounts(tmp_path) -> None:
 
     assert [result.status for result in results] == ["error", "success"]
     assert results[1].posts_new == 1
+
+
+def test_account_pool_failure_preserves_retry_hint(tmp_path) -> None:
+    account = SourceAccount("1", "first", "First")
+
+    class LockedSource(FakeSource):
+        async def fetch_timeline(self, x_user_id: str) -> AsyncIterator[SourcePost]:
+            raise AccountPoolUnavailableError("UserTweetsAndReplies", 123.0)
+            yield  # pragma: no cover
+
+    service = _service(tmp_path, LockedSource({"first": account}, {}))
+
+    with pytest.raises(AccountPoolUnavailableError) as caught:
+        asyncio.run(service.sync_account("1"))
+
+    assert caught.value.retry_after_seconds == 123.0
+    run = service.repository.list_sync_runs(account_x_user_id="1")[0]
+    assert run.status == "error"
+    assert "next account is available" in (run.error or "")
+
+
+def test_twscrape_response_failure_preserves_retry_type(tmp_path) -> None:
+    account = SourceAccount("1", "first", "First")
+
+    class BrokenSource(FakeSource):
+        async def fetch_timeline(self, x_user_id: str) -> AsyncIterator[SourcePost]:
+            raise TwscrapeResponseError("twscrape feature set rejected")
+            yield  # pragma: no cover
+
+    service = _service(tmp_path, BrokenSource({"first": account}, {}))
+
+    with pytest.raises(TwscrapeResponseError):
+        asyncio.run(service.sync_account("1"))
+
+    run = service.repository.list_sync_runs(account_x_user_id="1")[0]
+    assert run.status == "error"
+    assert run.error == "twscrape feature set rejected"
 
 
 def test_unlimited_initial_sync_imports_all_posts(tmp_path) -> None:
