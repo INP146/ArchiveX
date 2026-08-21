@@ -39,11 +39,29 @@ x-archivex-service: &archivex-service
   image: ghcr.io/inp146/archivex:0.1.2-rc1
   pull_policy: always
   volumes:
-    - ./data:/data
+    - state_data:/data
+    - ./data/archive:/data/archive
   environment: *archivex-environment
   restart: unless-stopped
 
 services:
+  state-migrate:
+    image: ghcr.io/inp146/archivex:0.1.2-rc1
+    pull_policy: always
+    # The legacy bind mount can be mode 0700/0600 on the host. This one-shot
+    # copier must read it as root; application containers still run as appuser.
+    user: "0:0"
+    entrypoint: ["python", "-m", "archivex.docker_state"]
+    command:
+      - --source
+      - /legacy-data
+      - --target
+      - /data
+    volumes:
+      - state_data:/data
+      - ./data:/legacy-data:ro
+    restart: "no"
+
   redis:
     image: redis:8-alpine@sha256:978f0e01593e65eed801f2402944efcd936d43b5027e4908a7897baf88ed6241
     pull_policy: always
@@ -59,6 +77,9 @@ services:
 
   archivex:
     <<: *archivex-service
+    depends_on:
+      state-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 5s
@@ -100,6 +121,8 @@ services:
       <<: *archivex-environment
       TASK_WORKER_QUEUE_NAME: archivex:crawl
     depends_on:
+      state-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -129,6 +152,8 @@ services:
       <<: *archivex-environment
       TASK_WORKER_QUEUE_NAME: archivex:media
     depends_on:
+      state-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -145,6 +170,8 @@ services:
       <<: *archivex-environment
       TASK_WORKER_QUEUE_NAME: archivex:crawl
     depends_on:
+      state-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -159,10 +186,13 @@ services:
     pull_policy: always
     profiles: ["tools"]
     command: ["archivex-data"]
-    working_dir: /workspace
+    working_dir: /
     volumes:
-      - .:/workspace
+      - state_data:/data
+      - ./data/archive:/data/archive
+      - ./backups:/backups
     restart: "no"
 
 volumes:
   redis_data:
+  state_data:

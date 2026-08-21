@@ -47,9 +47,14 @@ retry_scheduled，然后在运行 `docker compose up --build` 的终端按 `Ctrl
 停止后执行：
 
 ```sh
-docker compose run --rm --build state-migrate
-docker compose up --build
+docker compose run --rm state-migrate
+docker compose up -d
 ```
+
+构建版 Compose 需要在上述两个命令中分别加入 `--build`。镜像版
+`docker-compose.ghcr.yml` 不包含构建配置，直接使用已拉取的 ArchiveX 镜像；两份
+Compose 都会在 `docker compose up` 时通过 `service_completed_successfully` 自动
+等待迁移服务完成，因此手动运行迁移主要用于升级前单独观察和验证结果。
 
 `state-migrate` 以 root 读取可能是 `0700/0600` 的旧目录，但旧 `./data` 仍以只读
 方式挂载；迁移器先把数据库及其 WAL/SHM/journal 伴随文件复制到 named volume

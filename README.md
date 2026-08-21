@@ -217,7 +217,10 @@ docker compose up -d
 This deployment file has no `build` or `.env` dependency. Workers, the
 scheduler, and `tools` all use the backend image. It pins version `0.1.2-rc1`
 instead of relying on `latest`; change both image tags when upgrading. If the
-packages are private, log in to `ghcr.io` before pulling.
+packages are private, log in to `ghcr.io` before pulling. On first start,
+`state-migrate` copies legacy SQLite and twscrape state from `./data` into the
+Docker-managed `state_data` volume; archived media remains under
+`./data/archive`.
 
 ## Backup, restore, and upgrades
 

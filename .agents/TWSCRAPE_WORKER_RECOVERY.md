@@ -32,9 +32,10 @@ only the child process.
 
 ## Deployment note
 
-The image-only Compose file must be rebuilt or updated to include the source
-changes. Existing containers are intentionally not restarted by development
-tools. After a controlled deployment, verify `/ready` and inspect crawl logs
+The image-only Compose file must be downloaded at the matching release tag so it
+uses the corresponding backend image and includes the `state-migrate` service.
+Existing containers are intentionally not restarted by development tools. After
+a controlled deployment, verify `/ready` and inspect crawl logs
 for `No account available` events; a healthy retry should be one grouped retry
 at the reported lock expiry, not one 30-second wait per account.
 
