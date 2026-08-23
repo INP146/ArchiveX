@@ -23,6 +23,27 @@ def test_web_auth_username_is_normalized() -> None:
     assert settings.web_auth_username == "archive_admin"
 
 
+@pytest.mark.parametrize("value", ["", "   "])
+def test_blank_web_auth_avatar_url_is_normalized_to_none(value: str) -> None:
+    settings = Settings(
+        _env_file=None,
+        web_auth_token="test-token",
+        web_auth_avatar_url=value,
+    )
+
+    assert settings.web_auth_avatar_url is None
+
+
+def test_web_auth_avatar_url_whitespace_is_trimmed() -> None:
+    settings = Settings(
+        _env_file=None,
+        web_auth_token="test-token",
+        web_auth_avatar_url=" https://example.test/avatar.png ",
+    )
+
+    assert settings.web_auth_avatar_url == "https://example.test/avatar.png"
+
+
 def test_twscrape_pool_wait_settings_are_bounded() -> None:
     settings = Settings(
         _env_file=None,

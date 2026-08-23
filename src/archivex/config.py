@@ -65,7 +65,10 @@ class Settings(BaseSettings):
     @field_validator("web_auth_avatar_url", mode="before")
     @classmethod
     def normalize_optional_url(cls, value: str | None) -> str | None:
-        return value or None
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
     @model_validator(mode="after")
     def validate_dedupe_lock_lifetime(self) -> Self:
