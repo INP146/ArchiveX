@@ -23,7 +23,7 @@ def test_web_auth_username_is_normalized() -> None:
     assert settings.web_auth_username == "archive_admin"
 
 
-@pytest.mark.parametrize("value", ["", "   "])
+@pytest.mark.parametrize("value", ["", "   ", "\t\n"])
 def test_blank_web_auth_avatar_url_is_normalized_to_none(value: str) -> None:
     settings = Settings(
         _env_file=None,
