@@ -11,13 +11,17 @@ def test_required_settings_are_validated() -> None:
         Settings(_env_file=None)
 
 
-def test_web_auth_username_is_normalized() -> None:
+@pytest.mark.parametrize(
+    "value",
+    [" @archive_admin ", " @ archive_admin "],
+)
+def test_web_auth_username_is_normalized(value: str) -> None:
     settings = Settings(
         _env_file=None,
         archive_db_path="/tmp/archive.sqlite3",
         archive_data_dir="/tmp/archive",
         web_auth_token="test-token",
-        web_auth_username=" @archive_admin ",
+        web_auth_username=value,
     )
 
     assert settings.web_auth_username == "archive_admin"

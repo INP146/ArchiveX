@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     @field_validator("web_auth_username")
     @classmethod
     def normalize_auth_username(cls, value: str) -> str:
-        username = value.strip().lstrip("@")
+        username = value.strip().lstrip("@").strip()
         if not username:
             raise ValueError("must contain a username")
         return username
