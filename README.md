@@ -95,9 +95,11 @@ this repository.
 Browser clients establish a session with `POST /api/auth/session` and then use a
 signed, HttpOnly cookie. `DELETE /api/auth/session` logs out and `GET
 /api/auth/session` reports whether the browser is authenticated. Script clients
-can continue to use `Authorization: Bearer <WEB_AUTH_TOKEN>` for protected API
-routes. `WEB_SESSION_SECRET` is optional; when omitted, ArchiveX derives it from
-`WEB_AUTH_TOKEN`. Set `WEB_COOKIE_SECURE=true` when serving over HTTPS.
+can authenticate with the token from `WEB_AUTH_TOKEN` in the standard HTTP
+Authorization header. `WEB_SESSION_SECRET` is optional; when omitted, ArchiveX
+derives it from `WEB_AUTH_TOKEN`. Set `WEB_COOKIE_SECURE=true` when serving over
+HTTPS.
+
 `WEB_AUTH_DISPLAY_NAME`, `WEB_AUTH_USERNAME`, and `WEB_AUTH_AVATAR_URL` define
 the identity shown for the current token-authenticated user in the web sidebar;
 they are independent from the X accounts being archived.
