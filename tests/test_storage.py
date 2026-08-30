@@ -52,6 +52,20 @@ def test_empty_profile_banner_url_is_returned_as_none(tmp_path) -> None:
     assert repository.get_account_details(account.x_user_id)["profile_banner_url"] is None
 
 
+def test_blank_profile_image_url_is_returned_as_none(tmp_path) -> None:
+    repository, _, _ = _repository(tmp_path)
+    account = repository.upsert_account("42", "example", "Example")
+    repository.upsert_post(PostInput(
+        "100", account.x_user_id, "original", "post", datetime(2026, 8, 5, tzinfo=UTC),
+        "https://x.com/example/status/100", {"user": {"profileImageUrl": "  "}},
+    ))
+
+    assert repository.list_accounts()[0]["profile_image_url"] is None
+    details = repository.get_account_details(account.x_user_id)
+    assert details is not None
+    assert details["profile_image_url"] is None
+
+
 def test_media_and_sync_runs_are_persisted(tmp_path) -> None:
     repository, database_path, _ = _repository(tmp_path)
     account = repository.upsert_account("42", "example")

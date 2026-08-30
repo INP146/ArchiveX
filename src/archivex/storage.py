@@ -857,7 +857,9 @@ class ArchiveRepository:
         user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
         profile_image_url = user.get("profileImageUrl")
         if isinstance(profile_image_url, str):
-            profile_image_url = profile_image_url.replace("_normal.", "_400x400.")
+            profile_image_url = profile_image_url.strip() or None
+            if profile_image_url is not None:
+                profile_image_url = profile_image_url.replace("_normal.", "_400x400.")
         banner_url = user.get("profileBannerUrl")
         if isinstance(banner_url, str):
             banner_url = banner_url.strip().rstrip("/")
