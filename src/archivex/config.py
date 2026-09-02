@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Self
@@ -69,6 +70,14 @@ class Settings(BaseSettings):
             return None
         normalized = value.strip()
         return normalized or None
+
+    @field_validator("log_level")
+    @classmethod
+    def normalize_log_level(cls, value: str) -> str:
+        level = value.strip().upper()
+        if level not in logging.getLevelNamesMapping():
+            raise ValueError(f"unknown logging level: {value!r}")
+        return level
 
     @model_validator(mode="after")
     def validate_dedupe_lock_lifetime(self) -> Self:

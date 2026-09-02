@@ -48,6 +48,23 @@ def test_web_auth_avatar_url_whitespace_is_trimmed() -> None:
     assert settings.web_auth_avatar_url == "https://example.test/avatar.png"
 
 
+def test_log_level_is_normalized_and_validated() -> None:
+    settings = Settings(
+        _env_file=None,
+        web_auth_token="test-token",
+        log_level=" debug ",
+    )
+
+    assert settings.log_level == "DEBUG"
+
+    with pytest.raises(ValidationError, match="unknown logging level"):
+        Settings(
+            _env_file=None,
+            web_auth_token="test-token",
+            log_level="verbose",
+        )
+
+
 def test_twscrape_pool_wait_settings_are_bounded() -> None:
     settings = Settings(
         _env_file=None,
