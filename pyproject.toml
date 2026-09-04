@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "archivex"
-version = "0.1.2rc1"
+version = "0.1.2rc2"
 description = "Self-hosted X account archive"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,7 +16,7 @@ dependencies = [
   "pydantic-settings>=2.6,<3.0",
   "taskiq>=0.12.4,<0.13",
   "taskiq-redis>=1.2.3,<2.0",
-  "twscrape>=0.19.2,<0.20",
+  "twscrape>=0.20.1,<0.21",
   "uvicorn[standard]>=0.32,<1.0",
 ]
 

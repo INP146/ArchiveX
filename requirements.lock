@@ -116,7 +116,7 @@ taskiq-dependencies==1.5.7
     # via taskiq
 taskiq-redis==1.2.3
     # via archivex (pyproject.toml)
-twscrape==0.19.2
+twscrape==0.20.1
     # via archivex (pyproject.toml)
 typing-extensions==4.16.0
     # via

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from twscrape.accounts_pool import NoAccountError
+from twscrape.queue_client import GqlFeaturesOutdatedError
 
 from archivex.source import (
     AccountPoolUnavailableError,
@@ -128,24 +129,31 @@ def test_source_passes_short_account_wait_settings(monkeypatch, tmp_path) -> Non
     assert captured["raise_when_no_account"] is True
 
 
-def test_twscrape_feature_error_releases_context_instead_of_exiting() -> None:
-    released = []
+@pytest.mark.parametrize("operation", ("resolve", "timeline"))
+def test_twscrape_feature_error_remains_retryable(operation) -> None:
+    class FeatureErrorApi:
+        async def user_by_login(self, username):
+            raise GqlFeaturesOutdatedError("Update GQL_FEATURES")
 
-    class Client(source_module._SafeTwscrapeQueueClient):
-        def __init__(self):
-            pass
+        def user_tweets_and_replies(self, x_user_id):
+            async def fail():
+                raise GqlFeaturesOutdatedError("Update GQL_FEATURES")
+                yield  # pragma: no cover
 
-        async def _close_ctx(self, *args, **kwargs):
-            released.append(True)
+            return fail()
 
-    class Response:
-        def json(self):
-            return {"errors": [{"code": 336, "message": "features cannot be null"}]}
+    source = object.__new__(TwscrapePostSource)
+    source.api = FeatureErrorApi()
+    source._recovery_checked = True
 
-    with pytest.raises(source_module._FatalTwscrapeResponse):
-        asyncio.run(Client()._check_rep(Response()))
+    async def exercise() -> None:
+        if operation == "resolve":
+            await source.resolve_account("archivex")
+        else:
+            await anext(source.fetch_timeline("1"))
 
-    assert released == [True]
+    with pytest.raises(source_module.TwscrapeResponseError, match="Update GQL_FEATURES"):
+        asyncio.run(exercise())
 
 
 def test_cancelled_client_close_still_releases_the_account_lock(monkeypatch) -> None:

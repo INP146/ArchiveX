@@ -15,9 +15,9 @@ only the child process.
 - `AccountPoolUnavailableError` carries the earliest lock expiry. The retry
   middleware schedules all affected account tasks for that time, so they wake
   together rather than creating a 30-second retry ladder.
-- The ArchiveX adapter intercepts twscrape 0.19.2's GraphQL error 336 path,
-  which otherwise calls `exit(1)`. The account context is released and the
-  worker receives a normal retryable exception.
+- twscrape 0.20.1 reports GraphQL error 336 as `GqlFeaturesOutdatedError`
+  instead of calling `exit(1)`. The ArchiveX adapter preserves that failure as
+  a retryable error while its context wrapper releases the account lock.
 - Crawl workers hold an advisory lock beside `accounts.db`. A replacement
   child clears a twscrape lock only when the previous holder left an unclean
   marker and no other crawler currently holds the advisory lock. Recovery

@@ -22,6 +22,7 @@ from twscrape import API
 from twscrape.accounts_pool import NoAccountError
 from twscrape.db import execute as execute_twscrape_query
 from twscrape.queue_client import Ctx as _TwscrapeContext
+from twscrape.queue_client import GqlFeaturesOutdatedError
 from twscrape.queue_client import QueueClient as _TwscrapeQueueClient
 
 from archivex.session import session_database_path
@@ -46,33 +47,8 @@ class TwscrapeResponseError(RuntimeError):
     """A recoverable twscrape response error that must not kill the worker."""
 
 
-class _FatalTwscrapeResponse(BaseException):
-    """Internal control flow used to escape twscrape's broad exception handler."""
-
-
-def _response_has_unsupported_features(response: Any) -> bool:
-    try:
-        payload = response.json()
-    except Exception:
-        return False
-    errors = payload.get("errors") if isinstance(payload, Mapping) else None
-    if not isinstance(errors, list):
-        return False
-    for error in errors:
-        if not isinstance(error, Mapping):
-            continue
-        try:
-            code = int(error.get("code", -1))
-        except (TypeError, ValueError):
-            code = -1
-        message = str(error.get("message", ""))
-        if code == 336 or "features cannot be null" in message.lower():
-            return True
-    return False
-
-
 class _SafeTwscrapeQueueClient(_TwscrapeQueueClient):
-    """Prevent twscrape 0.19.2's feature error from calling ``exit(1)``."""
+    """Track request leases and release account locks on interrupted cleanup."""
 
     _archivex_safe_queue_client = True
 
@@ -148,22 +124,6 @@ class _SafeTwscrapeQueueClient(_TwscrapeQueueClient):
                     recover_lock=(cleanup_failed and reset_at <= 0 and not inactive),
                 )
                 self._archivex_session_lock_target = None
-
-    async def _check_rep(self, response: Any) -> None:
-        if _response_has_unsupported_features(response):
-            # QueueClient normally exits the interpreter before its async
-            # context manager can release the account lock. Close it here and
-            # use a BaseException so the upstream broad ``except Exception``
-            # cannot turn this into another 15-minute lock.
-            try:
-                await self._close_ctx()
-            except Exception:
-                logger.exception("Could not release twscrape account after feature error")
-            raise _FatalTwscrapeResponse(
-                "twscrape rejected the current GraphQL feature set (error 336)"
-            )
-        await super()._check_rep(response)
-
 
 def _install_twscrape_safety_patch() -> None:
     if not getattr(_twscrape_api.QueueClient, "_archivex_safe_queue_client", False):
@@ -609,7 +569,7 @@ class TwscrapePostSource:
         except NoAccountError as exc:
             retry_after = await _pool_retry_after(self.api.pool, "UserByScreenName")
             raise _pool_unavailable_error("UserByScreenName", retry_after) from exc
-        except _FatalTwscrapeResponse as exc:
+        except GqlFeaturesOutdatedError as exc:
             raise TwscrapeResponseError(str(exc)) from exc
         if user is None:
             return None
@@ -648,7 +608,7 @@ class TwscrapePostSource:
                 "UserTweetsAndReplies",
             )
             raise _pool_unavailable_error("UserTweetsAndReplies", retry_after) from exc
-        except _FatalTwscrapeResponse as exc:
+        except GqlFeaturesOutdatedError as exc:
             raise TwscrapeResponseError(str(exc)) from exc
 
 
