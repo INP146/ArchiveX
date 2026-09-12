@@ -50,6 +50,13 @@ def test_session_database_path_accepts_a_directory_or_file(tmp_path) -> None:
     assert session_database_path(tmp_path / "accounts.sqlite") == tmp_path / "accounts.sqlite"
 
 
+def test_session_database_path_accepts_an_existing_dotted_directory(tmp_path) -> None:
+    session_dir = tmp_path / "sessions.v1"
+    session_dir.mkdir()
+
+    assert session_database_path(session_dir) == session_dir / "accounts.db"
+
+
 def test_cookie_import_requires_explicit_replacement() -> None:
     pool = FakePool()
     assert asyncio.run(import_cookies(pool, "login", "valid", replace=False))

@@ -62,7 +62,11 @@ class TwscrapeSessionAccountManager:
 
 
 def session_database_path(session_path: Path) -> Path:
-    return session_path if session_path.suffix else session_path / "accounts.db"
+    return (
+        session_path
+        if session_path.suffix and not session_path.is_dir()
+        else session_path / "accounts.db"
+    )
 
 
 async def import_cookies(pool: AccountsPool, username: str, cookies: str, replace: bool) -> bool:
