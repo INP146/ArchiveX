@@ -187,7 +187,9 @@ def cookies_from_clipboard(timeout_seconds: float = 120, poll_interval: float = 
         if "auth_token=" in cookies and "ct0=" in cookies:
             return cookies
         if time.monotonic() >= deadline:
-            raise TimeoutError("no X cookies appeared on the clipboard within 120 seconds")
+            raise TimeoutError(
+                f"no X cookies appeared on the clipboard within {timeout_seconds:g} seconds"
+            )
         time.sleep(poll_interval)
 
 

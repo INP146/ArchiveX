@@ -78,6 +78,19 @@ def test_cookies_from_clipboard(monkeypatch) -> None:
     assert cookies_from_clipboard() == "auth_token=a; ct0=b"
 
 
+def test_cookies_from_clipboard_reports_custom_timeout(monkeypatch) -> None:
+    clock = iter((10.0, 12.5))
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, stdout=""),
+    )
+    monkeypatch.setattr("archivex.session.time.monotonic", lambda: next(clock))
+
+    with pytest.raises(TimeoutError, match="within 2.5 seconds"):
+        cookies_from_clipboard(timeout_seconds=2.5)
+
+
 def test_http_proxy_is_validated_and_credentials_are_masked() -> None:
     assert normalize_http_proxy(" http://user:secret@127.0.0.1:8080/ ") == (
         "http://user:secret@127.0.0.1:8080"
