@@ -626,7 +626,7 @@ def test_new_source_consumes_cleanup_failure_from_the_same_worker(
     assert source._recovery_targets == (target,)
 
 
-def test_media_from_payload_includes_reposted_tweet_video() -> None:
+def test_media_from_payload_does_not_flatten_reposted_video() -> None:
     payload = {
         "media": {},
         "retweetedTweet": {
@@ -641,12 +641,13 @@ def test_media_from_payload_includes_reposted_tweet_video() -> None:
         },
     }
 
-    assert media_from_payload(payload) == (
+    assert media_from_payload(payload) == ()
+    assert media_from_payload(payload["retweetedTweet"]) == (
         SourceMedia("video", "https://video.example/high.mp4"),
     )
 
 
-def test_media_from_payload_includes_quote_media_and_deduplicates_urls() -> None:
+def test_media_from_payload_keeps_quote_layers_separate() -> None:
     shared_url = "https://pbs.twimg.com/media/shared.jpg"
     payload = {
         "media": {"photos": [{"url": shared_url}]},
@@ -662,5 +663,4 @@ def test_media_from_payload_includes_quote_media_and_deduplicates_urls() -> None
 
     assert media_from_payload(payload) == (
         SourceMedia("image", shared_url),
-        SourceMedia("image", "https://pbs.twimg.com/media/quoted.jpg"),
     )

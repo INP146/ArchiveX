@@ -33,8 +33,14 @@ export interface TaskContext {
     permalink: string;
     text_preview: string;
   };
+  post_author?: {
+    x_user_id: string;
+    username: string | null;
+    display_name: string | null;
+  };
   media?: {
     id: string;
+    owner_tweet_id?: string;
     media_type?: string;
     source_url?: string;
     download_status?: string;
@@ -47,7 +53,7 @@ export interface TaskRecord {
   name: string;
   status: TaskStatus | "unknown";
   worker: string;
-  account_x_user_id: string | null;
+  observed_account_x_user_id: string | null;
   media_id: string | null;
   parent_task_id: string | null;
   trigger: string | null;

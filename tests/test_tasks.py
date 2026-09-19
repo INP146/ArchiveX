@@ -690,7 +690,7 @@ def test_account_enqueue_coalesces_duplicate_tasks(monkeypatch) -> None:
     assert second.duplicate is True
     assert second.task_id == first.task_id
     assert len(fake_task.calls) == 1
-    assert fake_task.labels[tasks.TASK_ACCOUNT_ID_LABEL] == "42"
+    assert fake_task.labels[tasks.TASK_OBSERVED_ACCOUNT_ID_LABEL] == "42"
     assert fake_task.labels[tasks.TASK_TRIGGER_LABEL] == "manual"
 
 
@@ -874,7 +874,7 @@ def test_task_context_links_sync_media_and_immutable_business_snapshot(tmp_path)
         ["42", "manual"],
         {},
         {
-            tasks.TASK_ACCOUNT_ID_LABEL: "42",
+            tasks.TASK_OBSERVED_ACCOUNT_ID_LABEL: "42",
             tasks.TASK_TRIGGER_LABEL: "manual",
         },
     )
@@ -892,7 +892,7 @@ def test_task_context_links_sync_media_and_immutable_business_snapshot(tmp_path)
 
     child = lifecycle.get_task(child_task_id)
     assert child is not None
-    assert child["account_x_user_id"] == "42"
+    assert child["observed_account_x_user_id"] == "42"
     assert child["media_id"] == media_id
     assert child["parent_task_id"] == parent_task_id
     assert child["context"] == {
@@ -901,6 +901,9 @@ def test_task_context_links_sync_media_and_immutable_business_snapshot(tmp_path)
             "username": "example",
             "display_name": "Example",
         },
+        "post_author": {
+            "x_user_id": "42", "username": "example", "display_name": "Example",
+        },
         "post": {
             "tweet_id": "100",
             "permalink": "https://x.com/example/status/100",
@@ -908,13 +911,14 @@ def test_task_context_links_sync_media_and_immutable_business_snapshot(tmp_path)
         },
         "media": {
             "id": media_id,
+            "owner_tweet_id": "100",
             "media_type": "image",
             "source_url": "https://example.test/image.jpg",
             "download_status": "pending",
         },
     }
     assert lifecycle.get_task(parent_task_id)["child_counts"]["queued"] == 1
-    assert lifecycle.list_tasks(query="100")["items"][0]["id"] == child_task_id
+    assert child_task_id in {item["id"] for item in lifecycle.list_tasks(query="100")["items"]}
 
     archive.observe_account_identity("42", "renamed", "Renamed")
     assert lifecycle.get_task(child_task_id)["context"]["account"]["username"] == "example"

@@ -141,6 +141,9 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
         profile_image_url = account.profile_image_url
         if profile_image_url:
             profile_image_url = profile_image_url.replace("_normal.", "_400x400.")
+        from archivex.post_model import UserSnapshot
+        repository.ensure_x_user(UserSnapshot(account.x_user_id, account.username, account.display_name,
+                                              account.profile_image_url, account.description))
         archived = repository.get_account(account.x_user_id)
         return {
             "x_user_id": account.x_user_id,
@@ -206,21 +209,26 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
     @router.get("/posts")
     def list_posts(
         account_x_user_id: str | None = None,
+        observed_account_x_user_id: str | None = None,
         q: str | None = Query(default=None, min_length=1, max_length=500),
         from_at: Annotated[datetime | None, Query(alias="from")] = None,
         to_at: Annotated[datetime | None, Query(alias="to")] = None,
         has_media: bool | None = None,
         post_type: PostType | None = None,
         exclude_post_type: PostType | None = None,
+        search_origin: bool = False,
         limit: int = Query(default=50, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
     ) -> list[dict[str, Any]]:
         if from_at and to_at and from_at > to_at:
             raise HTTPException(status_code=422, detail="from must be before or equal to to")
+        if account_x_user_id and observed_account_x_user_id and account_x_user_id != observed_account_x_user_id:
+            raise HTTPException(status_code=422, detail="account_x_user_id and observed_account_x_user_id disagree")
         posts = repository.list_posts(
-            account_x_user_id=account_x_user_id, query=q, from_at=from_at, to_at=to_at,
+            observed_account_x_user_id=observed_account_x_user_id or account_x_user_id,
+            query=q, from_at=from_at, to_at=to_at,
             has_media=has_media, post_type=post_type, exclude_post_type=exclude_post_type,
-            limit=limit, offset=offset,
+            limit=limit, offset=offset, search_origin=search_origin,
         )
         return [_post_response(post, repository) for post in posts]
 
@@ -246,11 +254,15 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
     @router.get("/sync-runs")
     def list_sync_runs(
         account_x_user_id: str | None = None,
+        observed_account_x_user_id: str | None = None,
         limit: int = Query(default=50, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
     ) -> list[dict[str, Any]]:
+        if account_x_user_id and observed_account_x_user_id and account_x_user_id != observed_account_x_user_id:
+            raise HTTPException(status_code=422, detail="account_x_user_id and observed_account_x_user_id disagree")
         return [run.__dict__ for run in repository.list_sync_runs(
-            account_x_user_id=account_x_user_id, limit=limit, offset=offset
+            observed_account_x_user_id=observed_account_x_user_id or account_x_user_id,
+            limit=limit, offset=offset
         )]
 
     @router.get("/task-center/tasks")
@@ -461,7 +473,7 @@ def _current_task_failures(
 
 
 def _task_context_id(task: dict[str, Any], subject: str, field: str) -> str | None:
-    direct_field = "account_x_user_id" if subject == "account" else "media_id"
+    direct_field = "observed_account_x_user_id" if subject == "account" else "media_id"
     direct_value = task.get(direct_field)
     if direct_value:
         return str(direct_value)
@@ -483,7 +495,7 @@ def _task_matches_query(task: dict[str, Any], query: str | None) -> bool:
         needle in str(task["name"]).casefold()
         or needle in str(task["worker"]).casefold()
         or compact_needle in str(task["id"]).replace("-", "").casefold()
-        or needle in str(task.get("account_x_user_id") or "").casefold()
+        or needle in str(task.get("observed_account_x_user_id") or "").casefold()
         or needle in str(task.get("media_id") or "").casefold()
         or needle in json.dumps(
             task.get("context", {}), ensure_ascii=False
@@ -510,14 +522,51 @@ def _require_token(expected_token: str):
     return require_token
 
 
-def _post_response(post: Any, repository: ArchiveRepository) -> dict[str, Any]:
+def _post_response(post: Any, repository: ArchiveRepository,
+                   seen: frozenset[str] = frozenset()) -> dict[str, Any]:
     response = post.__dict__.copy()
+    # Only HTTP boundaries expose a legacy alias; repository inputs are v3.
+    response['account_x_user_id'] = post.observed_account_x_user_id
+    response['reference'] = None
+    response['origin'] = None
+    response['reposter'] = None
+    response['reposted_at'] = None
+    response['reposted_by_display_name'] = None
+    if post.item_type == 'repost':
+        response['reposter'] = repository.get_x_user(post.reposter_x_user_id)
+        response['reposted_at'] = post.posted_at
+        origin = repository.get_post(post.origin_tweet_id)
+        response['origin'] = _post_response(origin, repository, seen | {post.tweet_id}) if origin else None
+        # v2 presentation fields all describe origin content. Event time and
+        # permalink retain their own meaning; metrics_source makes it explicit.
+        content = response['origin'] or {}
+        for field in ('display_text', 'author', 'author_x_user_id', 'author_display_name',
+                      'author_username', 'author_profile_image_url', 'author_verified',
+                      'reply_to_username', 'language', 'is_translatable', 'is_ai_generated',
+                      'reply_count', 'repost_count', 'like_count', 'view_count', 'media'):
+            response[field] = content.get(field)
+        reposter = response['reposter'] or {}
+        response['reposted_by_display_name'] = reposter.get('display_name') or reposter.get('username') or post.reposter_x_user_id
+        response['metrics_source_tweet_id'] = post.origin_tweet_id
+        return response
+    author = repository.get_x_user(post.author_x_user_id) or {}
+    response['author'] = author
+    response['username'] = author.get('username')
+    response['author_display_name'] = author.get('display_name')
+    response['author_username'] = author.get('username')
+    response['author_profile_image_url'] = author.get('profile_image_url')
+    response.update(repository.post_presentation(post.tweet_id))
     response.update(repository.post_metrics(post.tweet_id))
-    presentation = repository.post_presentation(post.tweet_id)
-    if not presentation["display_text"] and not presentation["author_username"]:
-        presentation["display_text"] = post.text
-    response.update(presentation)
-    response["media"] = [_media_response(media) for media in repository.post_media(post.tweet_id)]
+    response['metrics_source_tweet_id'] = post.tweet_id
+    response['media'] = [_media_response(m) for m in repository.post_media(post.tweet_id)]
+    if post.reference_tweet_id and post.reference_tweet_id not in seen and len(seen) < 8:
+        reference = repository.get_post(post.reference_tweet_id)
+        if reference:
+            response['reference'] = _post_response(reference, repository, seen | {post.tweet_id})
+    reference_author = (response['reference'] or {}).get('author') or {}
+    response['reply_to_username'] = (
+        reference_author.get('username') or response.get('reply_to_username')
+    ) if post.post_type == 'reply' else None
     return response
 
 

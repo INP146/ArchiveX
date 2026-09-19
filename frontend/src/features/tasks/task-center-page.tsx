@@ -431,7 +431,7 @@ function TaskDetail({ task }: { task: TaskRecord }) {
 }
 
 function TaskSubject({ task }: { task: TaskRecord }) {
-  const { account, media, post } = task.context;
+  const { account, media, post, post_author: author } = task.context;
   if (!account && !media) return null;
 
   return (
@@ -445,6 +445,7 @@ function TaskSubject({ task }: { task: TaskRecord }) {
             {account.username && <small>@{account.username}</small>}
           </Link>
         )}
+        {author && <span>内容作者：{author.display_name ?? author.username ?? author.x_user_id}</span>}
         {media && <code>{media.id}</code>}
       </div>
       <div className="x-task-subject-links">
@@ -489,7 +490,7 @@ function TaskState({ message, error = false }: { message: string; error?: boolea
 
 function taskLabel(name: string) { return TASK_NAMES[name] ?? name; }
 function taskSummary(task: TaskRecord) {
-  const { account, media, post } = task.context;
+  const { account, media, post, post_author: author } = task.context;
   const accountLabel = account?.username ? `@${account.username}` : account?.display_name || account?.x_user_id;
   if (media) {
     return [mediaTypeLabel(media.media_type), post ? `帖子 ${post.tweet_id}` : null, accountLabel]

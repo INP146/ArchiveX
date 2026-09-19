@@ -1,7 +1,10 @@
 import json
 import sqlite3
+import hashlib
+import pytest
 from datetime import UTC, datetime
 
+from archivex.migrate import migrate_archive
 from archivex.storage import ArchiveRepository, MediaInput, PostInput, initialize_storage
 
 
@@ -17,7 +20,7 @@ def test_post_upsert_updates_data_without_duplication(tmp_path) -> None:
     account = repository.upsert_account("42", "example", "Example")
     common = dict(
         tweet_id="100",
-        account_x_user_id=account.x_user_id,
+        author_x_user_id=account.x_user_id,
         post_type="original",
         posted_at=datetime(2026, 8, 5, 12, tzinfo=UTC),
         permalink="https://x.com/example/status/100",
@@ -36,7 +39,7 @@ def test_post_upsert_updates_data_without_duplication(tmp_path) -> None:
     assert count == 1
     assert text == "updated"
     assert first_seen_at
-    assert raw_path == "accounts/42/posts/2026/08/100/post.json"
+    assert raw_path == "posts/100/post.json"
     assert json.loads((archive_data_dir / raw_path).read_text()) == {"text": "updated"}
 
 
@@ -103,6 +106,7 @@ def test_account_media_queue_only_returns_new_pending_media(tmp_path) -> None:
         "100", account.x_user_id, "original", "post", datetime(2026, 8, 5, tzinfo=UTC),
         "https://x.com/example/status/100", {},
     ))
+    repository.observe_post(account.x_user_id, "100")
     pending_id = repository.upsert_media(
         MediaInput("100", "image", "https://example.test/pending.jpg")
     )
@@ -179,31 +183,35 @@ def test_legacy_schema_and_username_paths_are_migrated(tmp_path) -> None:
     (old_post_dir / "image.jpg").write_bytes(b"image")
     _create_legacy_database(database_path)
 
-    initialize_storage(database_path, archive_data_dir, tmp_path / "sessions")
+    with pytest.raises(RuntimeError, match="offline migration"):
+        initialize_storage(database_path, archive_data_dir, tmp_path / "sessions")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("UPDATE media SET sha256=?", (hashlib.sha256(b"image").hexdigest(),))
+    migrate_archive(database_path, archive_data_dir, output_dir=tmp_path / "migration", apply=True)
 
     with sqlite3.connect(database_path) as connection:
         connection.row_factory = sqlite3.Row
         account_columns = {
-            row["name"]: row for row in connection.execute("PRAGMA table_info(accounts)")
+            row["name"]: row for row in connection.execute("PRAGMA table_info(observed_accounts)")
         }
         post = connection.execute(
-            "SELECT account_x_user_id, raw_json_path FROM posts WHERE tweet_id = '100'"
+            "SELECT author_x_user_id, raw_json_path FROM posts WHERE tweet_id = '100'"
         ).fetchone()
         media_path = connection.execute(
-            "SELECT local_path FROM media WHERE tweet_id = '100'"
+            "SELECT local_path FROM media WHERE owner_tweet_id = '100'"
         ).fetchone()[0]
         history = connection.execute(
-            "SELECT x_user_id, username FROM account_username_history"
+            "SELECT x_user_id, username FROM observed_account_username_history"
         ).fetchone()
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
     assert "id" not in account_columns
     assert account_columns["x_user_id"]["pk"] == 1
     assert dict(post) == {
-        "account_x_user_id": "42",
-        "raw_json_path": "accounts/42/posts/2026/08/100/post.json",
+        "author_x_user_id": "42",
+        "raw_json_path": "posts/100/post.json",
     }
-    assert media_path == "accounts/42/posts/2026/08/100/image.jpg"
+    assert media_path == "posts/100/media-media-1.jpg"
     assert tuple(history) == ("42", "alice")
     assert (archive_data_dir / post["raw_json_path"]).is_file()
     assert (archive_data_dir / media_path).read_bytes() == b"image"

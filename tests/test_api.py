@@ -8,9 +8,9 @@ from archivex.config import Settings
 from archivex.main import create_app
 from archivex.session import SessionAccountSummary
 from archivex.source import SourceAccount, SourcePost
-from archivex.storage import ArchiveRepository, MediaInput, PostInput, initialize_storage
+from archivex.storage import ArchiveRepository, MediaInput, PostInput, RepostInput, initialize_storage
 from archivex.task_center import (
-    TASK_ACCOUNT_ID_LABEL,
+    TASK_OBSERVED_ACCOUNT_ID_LABEL,
     TASK_MEDIA_ID_LABEL,
     TASK_PARENT_ID_LABEL,
     TASK_TRIGGER_LABEL,
@@ -116,6 +116,7 @@ def test_archive_api_requires_authentication_and_returns_archived_data(tmp_path)
                 },
             },
         ))
+        repository.observe_post("42", "100")
         media_id = repository.upsert_media(MediaInput("100", "image", "https://example.test/image.jpg"))
         run_id = repository.start_sync_run(account.x_user_id)
         repository.finish_sync_run(run_id, posts_seen=1, posts_new=1, media_new=1, status="success")
@@ -252,11 +253,18 @@ def test_archive_api_filters_post_types_and_paginates(tmp_path) -> None:
         post_types = ["original", "reply", "quote", "reply", "repost"]
         for index, post_type in enumerate(post_types):
             tweet_id = str(100 + index)
-            repository.upsert_post(PostInput(
-                tweet_id, account.x_user_id, post_type, f"Post {tweet_id}",
-                datetime(2026, 8, 5, 12, index, tzinfo=UTC),
-                f"https://x.com/example/status/{tweet_id}", {},
-            ))
+            if post_type == "repost":
+                repository.upsert_repost(RepostInput(tweet_id, "100", account.x_user_id,
+                    datetime(2026, 8, 5, 12, index, tzinfo=UTC), f"https://x.com/example/status/{tweet_id}"))
+                repository.observe_repost(account.x_user_id, tweet_id)
+            else:
+                repository.upsert_post(PostInput(
+                    tweet_id, account.x_user_id, post_type, f"Post {tweet_id}",
+                    datetime(2026, 8, 5, 12, index, tzinfo=UTC),
+                    f"https://x.com/example/status/{tweet_id}", {},
+                ))
+                repository.observe_post(account.x_user_id, tweet_id)
+
 
         headers = {"Authorization": "Bearer test-token"}
         first_posts_page = client.get(
@@ -411,7 +419,7 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
     repository = ArchiveRepository(settings.archive_db_path, settings.archive_data_dir)
     repository.upsert_account("42", "example", "Example")
     root_labels = {
-        TASK_ACCOUNT_ID_LABEL: "42",
+        TASK_OBSERVED_ACCOUNT_ID_LABEL: "42",
         TASK_TRIGGER_LABEL: "manual",
     }
     lifecycle = TaskCenterRepository(
@@ -463,7 +471,7 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
         assert tasks.json()["total"] == 1
         assert tasks.json()["items"][0]["id"] == task_id
         assert tasks.json()["items"][0]["duration_ms"] == 2000
-        assert tasks.json()["items"][0]["account_x_user_id"] == "42"
+        assert tasks.json()["items"][0]["observed_account_x_user_id"] == "42"
         assert tasks.json()["items"][0]["trigger"] == "manual"
         assert tasks.json()["items"][0]["context"]["account"]["username"] == "example"
 
@@ -619,7 +627,7 @@ def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
             task_labels = dict(labels)
             if name == "archivex.sync_account":
                 task_labels.update({
-                    TASK_ACCOUNT_ID_LABEL: str(args[0]),
+                    TASK_OBSERVED_ACCOUNT_ID_LABEL: str(args[0]),
                     TASK_TRIGGER_LABEL: str(args[1]),
                 })
             elif name == "archivex.download_media":

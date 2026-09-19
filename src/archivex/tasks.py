@@ -31,7 +31,7 @@ from archivex.source import AccountPoolUnavailableError, TwscrapePostSource
 from archivex.storage import ArchiveRepository
 from archivex.sync import ArchiveSyncService
 from archivex.task_center import (
-    TASK_ACCOUNT_ID_LABEL,
+    TASK_OBSERVED_ACCOUNT_ID_LABEL,
     TASK_MEDIA_ID_LABEL,
     TASK_PARENT_ID_LABEL,
     TASK_TRIGGER_LABEL,
@@ -718,7 +718,7 @@ async def enqueue_account_sync(
         return TaskSubmission(owner_task_id, "queued", True)
     labels = _task_labels(sync_account_task)
     task_labels = {
-        TASK_ACCOUNT_ID_LABEL: x_user_id,
+        TASK_OBSERVED_ACCOUNT_ID_LABEL: x_user_id,
         TASK_TRIGGER_LABEL: trigger,
     }
     labels.update(task_labels)
@@ -892,7 +892,7 @@ async def download_media_task(
         result = await asyncio.to_thread(
             downloader.download,
             media.source_url,
-            repository.post_directory(media.tweet_id),
+            repository.post_directory(media.owner_tweet_id),
             settings.archive_media_max_bytes,
         )
         repository.complete_media(media.id, result.local_path, result.sha256)
@@ -907,7 +907,7 @@ async def download_media_task(
         raise
 
     await _release_lock(lock_key, task_id)
-    return {"status": "success", "media_id": media_id, "tweet_id": media.tweet_id}
+    return {"status": "success", "media_id": media_id, "owner_tweet_id": media.owner_tweet_id}
 
 
 @broker.task(

@@ -18,8 +18,9 @@ import { TbSparkles } from "react-icons/tb";
 import { ApiError } from "../../lib/api/client";
 import {
   AccountTimelineTab,
-  ArchivedPost,
+  TimelineItem,
   getTimelinePosts,
+  PostContent,
   PostMedia,
   POSTS_PAGE_SIZE
 } from "../../lib/api/posts";
@@ -55,9 +56,9 @@ export function PostTimeline({
       : undefined
   });
   const timelinePosts = useMemo(() => {
-    const uniquePosts = new Map<string, ArchivedPost>();
+    const uniquePosts = new Map<string, TimelineItem>();
     posts.data?.pages.forEach((page) => {
-      page.forEach((post) => uniquePosts.set(post.tweet_id, post));
+      page.forEach((post) => uniquePosts.set(`${post.item_type}:${post.tweet_id}`, post));
     });
     return [...uniquePosts.values()];
   }, [posts.data]);
@@ -80,7 +81,7 @@ export function PostTimeline({
       {!posts.isPending && !posts.isError && timelinePosts.length === 0 && (
         <div className="x-timeline-state">{emptyMessage}</div>
       )}
-      {timelinePosts.map((post) => <PostItem key={post.tweet_id} post={post} />)}
+      {timelinePosts.map((post) => <PostItem key={`${post.item_type}:${post.tweet_id}`} post={post} />)}
       {posts.isFetchNextPageError && (
         <div className="x-timeline-state x-timeline-more">
           <span>更多帖子加载失败</span>
@@ -109,20 +110,24 @@ function TimelineError({ error }: { error: Error }) {
   );
 }
 
-function PostItem({ post }: { post: ArchivedPost }) {
-  const authorName = post.author_display_name ?? post.author_username ?? post.username
-    ?? post.account_x_user_id;
-  const authorUsername = post.author_username ?? post.username ?? post.account_x_user_id;
-  const avatarUrl = post.author_profile_image_url;
+function PostItem({ post: item }: { post: TimelineItem }) {
+  const post = item.item_type === "repost" ? item.origin : item;
+  const authorName = post.author.display_name ?? post.author.username
+    ?? (post.author.x_user_id === "unknown" ? "作者未知" : post.author.x_user_id);
+  const authorUsername = post.author.username;
+  const avatarUrl = post.author.profile_image_url;
   const translationLanguage = post.language && !isChineseLanguage(post.language)
     ? formatLanguage(post.language)
     : null;
   return (
     <article className={post.post_type === "reply" ? "x-post x-post-reply" : "x-post"}>
-      {post.reposted_by_display_name && (
+      {item.item_type === "repost" && (
         <div className="x-post-repost">
           <FiRepeat aria-hidden="true" />
-          <span>{post.reposted_by_display_name} 已转帖</span>
+          <a href={item.permalink} target="_blank" rel="noreferrer">
+            {item.reposter.display_name ?? item.reposter.username ?? item.reposter.x_user_id} 已转帖
+            <time dateTime={item.reposted_at}> · {formatPostDate(item.reposted_at)}</time>
+          </a>
         </div>
       )}
       <div className="x-post-main">
@@ -134,7 +139,7 @@ function PostItem({ post }: { post: ArchivedPost }) {
             <div className="x-post-author">
               <strong>{authorName}</strong>
               {post.author_verified && <BsPatchCheckFill className="x-verified" aria-label="已认证" />}
-              <span className="x-post-handle">@{authorUsername}</span>
+              {authorUsername && <span className="x-post-handle">@{authorUsername}</span>}
               <span>·</span>
               <time dateTime={post.posted_at}>{formatPostDate(post.posted_at)}</time>
             </div>
@@ -167,7 +172,9 @@ function PostItem({ post }: { post: ArchivedPost }) {
             </div>
           )}
           {post.display_text && <p className="x-post-text">{post.display_text}</p>}
+          {post.availability === "unknown" && <p className="x-post-context">尚未获取这条帖子的内容</p>}
           {post.media.length > 0 && <MediaGrid media={post.media} />}
+          {post.post_type === "quote" && post.reference && <ReferenceCard reference={post.reference} />}
           {post.is_ai_generated && (
             <div className="x-post-ai-label"><TbSparkles aria-hidden="true" />由 AI 生成</div>
           )}
@@ -182,6 +189,23 @@ function PostItem({ post }: { post: ArchivedPost }) {
         </div>
       </div>
     </article>
+  );
+}
+
+function ReferenceCard({ reference, label = "引用" }: { reference: PostContent; label?: string }) {
+  const author = reference.author.display_name ?? reference.author.username ?? (reference.author.x_user_id === "unknown" ? "作者未知" : reference.author.x_user_id);
+  return (
+    <aside className="x-post-reference">
+      <div className="x-post-reference-heading">
+        <span>{label}</span>
+        <span>{author}</span>
+      </div>
+      {reference.display_text && <p className="x-post-text">{reference.display_text}</p>}
+      {reference.availability === "unknown" && <p>尚未获取引用内容</p>}
+      {reference.media.length > 0 && <MediaGrid media={reference.media} />}
+      {reference.post_type === "quote" && reference.reference && <ReferenceCard reference={reference.reference} />}
+      <a href={reference.permalink} target="_blank" rel="noreferrer">打开原帖</a>
+    </aside>
   );
 }
 

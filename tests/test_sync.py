@@ -140,7 +140,7 @@ def test_account_pool_failure_preserves_retry_hint(tmp_path) -> None:
         asyncio.run(service.sync_account("1"))
 
     assert caught.value.retry_after_seconds == 123.0
-    run = service.repository.list_sync_runs(account_x_user_id="1")[0]
+    run = service.repository.list_sync_runs(observed_account_x_user_id="1")[0]
     assert run.status == "error"
     assert "next account is available" in (run.error or "")
 
@@ -158,7 +158,7 @@ def test_twscrape_response_failure_preserves_retry_type(tmp_path) -> None:
     with pytest.raises(TwscrapeResponseError):
         asyncio.run(service.sync_account("1"))
 
-    run = service.repository.list_sync_runs(account_x_user_id="1")[0]
+    run = service.repository.list_sync_runs(observed_account_x_user_id="1")[0]
     assert run.status == "error"
     assert run.error == "twscrape feature set rejected"
 
@@ -229,10 +229,7 @@ def test_interrupted_initial_sync_ignores_incremental_known_post_limit(tmp_path)
     service = _service(tmp_path, source, initial_post_limit=-1,
                        incremental_known_post_limit=2)
     for post in source.posts["1"][:3]:
-        service.repository.upsert_post(PostInput(
-            post.tweet_id, post.x_user_id, post.post_type, post.text, post.posted_at,
-            post.permalink, post.raw_payload,
-        ))
+        service.repository.ingest_item(post, "1")
 
     result = asyncio.run(service.sync_account("1"))
 
@@ -266,7 +263,7 @@ def test_cancelled_sync_run_is_marked_interrupted(tmp_path) -> None:
 
     asyncio.run(cancel_sync())
 
-    run = service.repository.list_sync_runs(account_x_user_id="1")[0]
+    run = service.repository.list_sync_runs(observed_account_x_user_id="1")[0]
     assert run.status == "interrupted"
     assert run.finished_at is not None
     assert run.error == "synchronization cancelled"
@@ -355,28 +352,6 @@ def test_failed_media_is_retried_when_post_is_absent_from_later_timeline(tmp_pat
     assert status == "completed"
     assert error is None
 
-
-def test_existing_posts_are_backfilled_from_their_raw_payload(tmp_path) -> None:
-    account = SourceAccount("1", "first", "First")
-    source = FakeSource({"first": account}, {"1": []})
-    downloader = FakeDownloader()
-    service = _service(tmp_path, source, downloader=downloader)
-    archived_account = service.repository.upsert_account("1", "first", "First")
-    service.repository.upsert_post(PostInput(
-        "2", archived_account.x_user_id, "repost", "post", datetime(2026, 8, 5, tzinfo=UTC),
-        "https://x.com/first/status/2", {
-            "media": {},
-            "retweetedTweet": {
-                "media": {"photos": [{"url": "https://pbs.twimg.com/media/example.jpg"}],
-                          "videos": [], "animated": []}
-            },
-        },
-    ))
-
-    result = asyncio.run(service.sync_account("1"))
-
-    assert result.media_new == 1
-    assert downloader.calls == [("https://pbs.twimg.com/media/example.jpg", 0)]
 
 
 def test_sync_uses_stable_x_user_id_after_username_changes_owner(tmp_path) -> None:

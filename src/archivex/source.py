@@ -26,6 +26,12 @@ from twscrape.queue_client import GqlFeaturesOutdatedError
 from twscrape.queue_client import QueueClient as _TwscrapeQueueClient
 
 from archivex.session import session_database_path
+from archivex.post_model import (
+    SourceMedia as SourceMedia,
+    SourcePost,
+    media_from_payload as media_from_payload,
+    parse_post,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -464,25 +470,6 @@ class SourceAccount:
     description: str | None = None
 
 
-@dataclass(frozen=True)
-class SourcePost:
-    tweet_id: str
-    x_user_id: str
-    username: str
-    post_type: str
-    text: str
-    posted_at: datetime
-    permalink: str
-    raw_payload: Mapping[str, Any]
-    media: tuple["SourceMedia", ...] = ()
-
-
-@dataclass(frozen=True)
-class SourceMedia:
-    media_type: str
-    source_url: str
-
-
 class PostSource(Protocol):
     async def resolve_account(self, username: str) -> SourceAccount | None: ...
 
@@ -591,16 +578,20 @@ class TwscrapePostSource:
                     if str(tweet.user.id) != x_user_id:
                         continue
                     raw_payload = tweet.dict()
-                    yield SourcePost(
+                    if isinstance(raw_payload, dict):
+                        raw_payload.setdefault("id", str(tweet.id))
+                        raw_payload.setdefault("user", {
+                            "id": str(tweet.user.id),
+                            "username": getattr(tweet.user, "username", None),
+                        })
+                    yield parse_post(
+                        raw_payload,
                         tweet_id=str(tweet.id),
                         x_user_id=str(tweet.user.id),
-                        username=tweet.user.username,
-                        post_type=_post_type(tweet),
-                        text=tweet.rawContent,
+                        username=getattr(tweet.user, "username", None),
+                        text=getattr(tweet, "rawContent", ""),
                         posted_at=tweet.date,
                         permalink=tweet.url,
-                        raw_payload=raw_payload,
-                        media=media_from_payload(raw_payload),
                     )
         except NoAccountError as exc:
             retry_after = await _pool_retry_after(
@@ -610,64 +601,3 @@ class TwscrapePostSource:
             raise _pool_unavailable_error("UserTweetsAndReplies", retry_after) from exc
         except GqlFeaturesOutdatedError as exc:
             raise TwscrapeResponseError(str(exc)) from exc
-
-
-def _post_type(tweet: Any) -> str:
-    if tweet.retweetedTweet is not None:
-        return "repost"
-    if tweet.quotedTweet is not None or tweet.isQuoteStatus:
-        return "quote"
-    if tweet.inReplyToTweetId is not None:
-        return "reply"
-    return "original"
-
-
-def media_from_payload(payload: Mapping[str, Any]) -> tuple[SourceMedia, ...]:
-    """Extract downloadable media from a tweet and its embedded tweet payloads."""
-    items: list[SourceMedia] = []
-    seen_urls: set[str] = set()
-
-    def append(media_type: str, source_url: object) -> None:
-        if not isinstance(source_url, str) or not source_url or source_url in seen_urls:
-            return
-        seen_urls.add(source_url)
-        items.append(SourceMedia(media_type, source_url))
-
-    def extract(tweet: Mapping[str, Any]) -> None:
-        media = tweet.get("media")
-        if isinstance(media, Mapping):
-            photos = media.get("photos")
-            if isinstance(photos, list):
-                for photo in photos:
-                    if isinstance(photo, Mapping):
-                        append("image", photo.get("url"))
-
-            videos = media.get("videos")
-            if isinstance(videos, list):
-                for video in videos:
-                    if not isinstance(video, Mapping):
-                        continue
-                    variants = video.get("variants")
-                    if not isinstance(variants, list):
-                        continue
-                    downloadable = [
-                        variant for variant in variants
-                        if isinstance(variant, Mapping) and isinstance(variant.get("url"), str)
-                    ]
-                    if downloadable:
-                        best = max(downloadable, key=lambda variant: variant.get("bitrate") or -1)
-                        append("video", best.get("url"))
-
-            animated_items = media.get("animated")
-            if isinstance(animated_items, list):
-                for animated in animated_items:
-                    if isinstance(animated, Mapping):
-                        append("gif", animated.get("videoUrl"))
-
-        for field in ("retweetedTweet", "quotedTweet"):
-            embedded = tweet.get(field)
-            if isinstance(embedded, Mapping):
-                extract(embedded)
-
-    extract(payload)
-    return tuple(items)

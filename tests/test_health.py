@@ -36,7 +36,7 @@ def test_health_initializes_persistent_storage(tmp_path) -> None:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
-    assert {"accounts", "posts", "media", "queue_tasks", "queue_attempts"} <= tables
+    assert {"x_users", "observed_accounts", "posts", "reposts", "media", "queue_tasks", "queue_attempts"} <= tables
 
 
 def test_api_startup_does_not_change_worker_owned_sync_runs(tmp_path) -> None:

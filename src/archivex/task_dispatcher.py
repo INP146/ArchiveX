@@ -70,7 +70,7 @@ class InlineSyncTaskDispatcher:
             result = await asyncio.to_thread(
                 self.service.media_downloader.download,
                 media.source_url,
-                self.service.repository.post_directory(media.tweet_id),
+                self.service.repository.post_directory(media.owner_tweet_id),
                 self.service.media_max_bytes,
             )
             self.service.repository.complete_media(media.id, result.local_path, result.sha256)

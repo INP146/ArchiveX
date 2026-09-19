@@ -20,7 +20,7 @@ TASK_STATUSES = (
 )
 TASK_STATUS_VALUES = {status: status for status in TASK_STATUSES}
 TERMINAL_TASK_STATUSES = ("completed", "failure", "abandoned")
-TASK_ACCOUNT_ID_LABEL = "_archivex_account_x_user_id"
+TASK_OBSERVED_ACCOUNT_ID_LABEL = "_archivex_observed_account_x_user_id"
 TASK_MEDIA_ID_LABEL = "_archivex_media_id"
 TASK_PARENT_ID_LABEL = "_archivex_parent_task_id"
 TASK_TRIGGER_LABEL = "_archivex_trigger"
@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS queue_tasks (
     name TEXT NOT NULL,
     status TEXT NOT NULL,
     worker TEXT NOT NULL,
-    account_x_user_id TEXT REFERENCES accounts(x_user_id) ON DELETE SET NULL,
+    observed_account_x_user_id TEXT REFERENCES observed_accounts(x_user_id) ON DELETE SET NULL,
     media_id TEXT REFERENCES media(id) ON DELETE SET NULL,
     parent_task_id TEXT REFERENCES queue_tasks(id) ON DELETE SET NULL,
     trigger TEXT,
@@ -69,7 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_queue_tasks_status_updated
 CREATE INDEX IF NOT EXISTS idx_queue_tasks_target
     ON queue_tasks(name, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_queue_tasks_account
-    ON queue_tasks(account_x_user_id, updated_at DESC);
+    ON queue_tasks(observed_account_x_user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_queue_tasks_media
     ON queue_tasks(media_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_queue_tasks_parent
@@ -79,7 +79,7 @@ CREATE INDEX IF NOT EXISTS idx_queue_tasks_parent
 
 @dataclass(frozen=True)
 class _TaskMetadata:
-    account_x_user_id: str | None
+    observed_account_x_user_id: str | None
     media_id: str | None
     parent_task_id: str | None
     trigger: str | None
@@ -503,7 +503,7 @@ class TaskCenterRepository:
         if query:
             filters.append(
                 "(name LIKE ? OR id LIKE ? OR worker LIKE ? "
-                "OR account_x_user_id LIKE ? OR media_id LIKE ? OR context LIKE ?)"
+                "OR observed_account_x_user_id LIKE ? OR media_id LIKE ? OR context LIKE ?)"
             )
             pattern = f"%{query}%"
             parameters.extend([
@@ -712,6 +712,8 @@ class TaskCenterRepository:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA foreign_keys=ON")
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE name='accounts'").fetchone():
+                raise RuntimeError('Archive schema requires offline migration: python -m archivex.migrate --help')
             connection.executescript(TASK_SCHEMA)
 
     @staticmethod
@@ -720,26 +722,32 @@ class TaskCenterRepository:
         name: str,
         labels: dict[str, Any],
     ) -> _TaskMetadata:
-        account_candidate = _optional_text(labels.get(TASK_ACCOUNT_ID_LABEL))
+        account_candidate = _optional_text(labels.get(TASK_OBSERVED_ACCOUNT_ID_LABEL))
         media_candidate = _optional_text(labels.get(TASK_MEDIA_ID_LABEL))
         parent_task_id = _existing_task_id(connection, labels.get(TASK_PARENT_ID_LABEL))
         retry_of = _existing_task_id(connection, labels.get("retry_of"))
         trigger = _optional_text(labels.get(TASK_TRIGGER_LABEL))
+        if account_candidate is None and parent_task_id:
+            parent = connection.execute(
+                'SELECT observed_account_x_user_id FROM queue_tasks WHERE id=?',
+                (parent_task_id,),
+            ).fetchone()
+            account_candidate = parent['observed_account_x_user_id'] if parent else None
 
         context: dict[str, Any] = {}
-        account_x_user_id: str | None = None
+        observed_account_x_user_id: str | None = None
         media_id: str | None = None
         if account_candidate is not None:
             account = _fetchone_optional(
                 connection,
                 """SELECT x_user_id, current_username, display_name
-                FROM accounts WHERE x_user_id = ?""",
+                FROM observed_accounts a JOIN x_users u USING (x_user_id) WHERE a.x_user_id = ?""",
                 (account_candidate,),
             )
             if account:
-                account_x_user_id = str(account["x_user_id"])
+                observed_account_x_user_id = str(account["x_user_id"])
             context["account"] = {
-                "x_user_id": account_x_user_id if account else account_candidate,
+                "x_user_id": observed_account_x_user_id if account else account_candidate,
                 "username": account["current_username"] if account else None,
                 "display_name": account["display_name"] if account else None,
             }
@@ -749,23 +757,37 @@ class TaskCenterRepository:
                 connection,
                 """SELECT media.id, media.media_type, media.source_url,
                     media.download_status, posts.tweet_id, posts.permalink,
-                    posts.text, accounts.x_user_id, accounts.current_username,
-                    accounts.display_name
+                    posts.text, posts.author_x_user_id AS author_x_user_id,
+                    x_users.current_username, x_users.display_name
                 FROM media
-                JOIN posts ON posts.tweet_id = media.tweet_id
-                JOIN accounts ON accounts.x_user_id = posts.account_x_user_id
+                JOIN posts ON posts.tweet_id = media.owner_tweet_id
+                JOIN x_users ON x_users.x_user_id = posts.author_x_user_id
                 WHERE media.id = ?""",
                 (media_candidate,),
             )
             if media:
                 media_id = str(media["id"])
-                media_account_id = str(media["x_user_id"])
-                context["account"] = {
-                    "x_user_id": media_account_id,
+                media_author_id = str(media["author_x_user_id"])
+                author_context = {
+                    "x_user_id": media_author_id,
                     "username": media["current_username"],
                     "display_name": media["display_name"],
                 }
-                account_x_user_id = media_account_id
+                context["post_author"] = author_context
+                if observed_account_x_user_id is None:
+                    observer = connection.execute("""WITH RECURSIVE seen(account, tweet) AS (
+                        SELECT observed_account_x_user_id,tweet_id FROM archive_post_observations
+                        UNION SELECT o.observed_account_x_user_id,r.origin_tweet_id
+                            FROM archive_repost_observations o JOIN reposts r USING(repost_tweet_id)
+                        UNION SELECT s.account,p.reference_tweet_id FROM seen s JOIN posts p ON p.tweet_id=s.tweet
+                            WHERE p.reference_tweet_id IS NOT NULL
+                        ) SELECT u.x_user_id,u.current_username,u.display_name FROM seen s
+                        JOIN x_users u ON u.x_user_id=s.account WHERE s.tweet=? ORDER BY u.x_user_id LIMIT 1""",
+                        (media['tweet_id'],)).fetchone()
+                    if observer:
+                        observed_account_x_user_id = observer['x_user_id']
+                        context['account'] = {'x_user_id':observer['x_user_id'],
+                            'username':observer['current_username'],'display_name':observer['display_name']}
                 context["post"] = {
                     "tweet_id": str(media["tweet_id"]),
                     "permalink": str(media["permalink"]),
@@ -773,6 +795,7 @@ class TaskCenterRepository:
                 }
                 context["media"] = {
                     "id": str(media["id"]),
+                    "owner_tweet_id": str(media["tweet_id"]),
                     "media_type": str(media["media_type"]),
                     "source_url": str(media["source_url"]),
                     "download_status": str(media["download_status"]),
@@ -784,7 +807,7 @@ class TaskCenterRepository:
             context["schedule"] = {"id": "enabled-account-sync"}
 
         return _TaskMetadata(
-            account_x_user_id=account_x_user_id,
+            observed_account_x_user_id=observed_account_x_user_id,
             media_id=media_id,
             parent_task_id=parent_task_id,
             trigger=trigger,
@@ -806,7 +829,7 @@ class TaskCenterRepository:
     ) -> None:
         connection.execute(
             """INSERT OR IGNORE INTO queue_tasks (
-                id, name, status, worker, account_x_user_id, media_id,
+                id, name, status, worker, observed_account_x_user_id, media_id,
                 parent_task_id, trigger, context, args, kwargs, labels, queued_at,
                 current_attempt, max_attempts, retry_of, created_at, updated_at
             ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -814,7 +837,7 @@ class TaskCenterRepository:
                 task_id,
                 name,
                 worker,
-                metadata.account_x_user_id,
+                metadata.observed_account_x_user_id,
                 metadata.media_id,
                 metadata.parent_task_id,
                 metadata.trigger,
@@ -878,7 +901,7 @@ class TaskCenterRepository:
             "name": str(row["name"]),
             "status": str(row["status"]),
             "worker": str(row["worker"] or ""),
-            "account_x_user_id": row["account_x_user_id"],
+            "observed_account_x_user_id": row["observed_account_x_user_id"],
             "media_id": row["media_id"],
             "parent_task_id": (
                 str(uuid.UUID(hex=str(row["parent_task_id"])))
@@ -1005,7 +1028,7 @@ def _task_target_key(task: dict[str, Any]) -> tuple[str, str]:
     schedule = context.get("schedule") if isinstance(context.get("schedule"), dict) else {}
     structured_target = (
         task.get("media_id")
-        or task.get("account_x_user_id")
+        or task.get("observed_account_x_user_id")
         or media.get("id")
         or account.get("x_user_id")
         or schedule.get("id")

@@ -149,3 +149,21 @@
   .x-post-tools { gap: 4px; }
   .x-media-grid img, .x-media-grid video { min-height: 180px; }
 }
+
+.x-post-reference {
+  border: 1px solid var(--x-border, #d8dde4);
+  border-radius: 14px;
+  padding: 12px;
+  margin: 12px 0;
+  overflow: hidden;
+}
+.x-post-reference-heading {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.x-post-reference-heading > span:first-child { color: var(--x-muted, #536471); }
+.x-post-reference > a { display: inline-block; margin-top: 8px; font-size: 13px; }
+.x-post-repost a { color: inherit; text-decoration: none; }
+.x-post-repost a:hover { text-decoration: underline; }

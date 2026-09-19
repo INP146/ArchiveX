@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "archivex"
-version = "0.1.2rc2"
+version = "0.1.2rc3"
 description = "Self-hosted X account archive"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -30,6 +30,8 @@ dev = [
 archivex = "archivex.main:main"
 archivex-data = "archivex.data_backup:main"
 archivex-session = "archivex.session:main"
+archivex-migrate = "archivex.migrate:main"
+archivex-migrate-compact = "archivex.migrate_compact:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
