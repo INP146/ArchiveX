@@ -100,6 +100,8 @@ def test_http_proxy_is_validated_and_credentials_are_masked() -> None:
     )
     with pytest.raises(ValueError, match="http://host:port"):
         normalize_http_proxy("socks5://127.0.0.1:1080")
+    with pytest.raises(ValueError, match="http://host:port"):
+        normalize_http_proxy("http://127.0.0.1")
     with pytest.raises(ValueError, match="path"):
         normalize_http_proxy("http://127.0.0.1:8080/path")
 

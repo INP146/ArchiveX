@@ -133,9 +133,11 @@ def normalize_http_proxy(value: str) -> str:
     if parsed.scheme.lower() != "http" or parsed.hostname is None:
         raise ValueError("HTTP proxy must use http://host:port")
     try:
-        parsed.port
+        port = parsed.port
     except ValueError as exc:
         raise ValueError("HTTP proxy has an invalid port") from exc
+    if port is None:
+        raise ValueError("HTTP proxy must use http://host:port")
     if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
         raise ValueError("HTTP proxy URL cannot contain a path, query, or fragment")
     return urlunsplit(("http", parsed.netloc, "", "", ""))
