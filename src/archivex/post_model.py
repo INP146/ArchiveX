@@ -85,7 +85,7 @@ def media_from_payload(payload: Mapping[str, Any]) -> tuple[SourceMedia, ...]:
         variants = [
             v
             for v in video.get("variants") or ()
-            if isinstance(v, Mapping) and isinstance(v.get("url"), str)
+            if isinstance(v, Mapping) and isinstance(v.get("url"), str) and v["url"]
         ]
         if variants:
             best = max(variants, key=lambda v: v.get("bitrate") or -1)
