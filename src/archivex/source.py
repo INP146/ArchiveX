@@ -21,6 +21,7 @@ import twscrape.api as _twscrape_api
 from twscrape import API
 from twscrape.accounts_pool import NoAccountError
 from twscrape.db import execute as execute_twscrape_query
+from twscrape.models import Tweet, parse_tweets
 from twscrape.queue_client import Ctx as _TwscrapeContext
 from twscrape.queue_client import GqlFeaturesOutdatedError
 from twscrape.queue_client import QueueClient as _TwscrapeQueueClient
@@ -570,29 +571,34 @@ class TwscrapePostSource:
 
     async def fetch_timeline(self, x_user_id: str) -> AsyncIterator[SourcePost]:
         await self._ensure_ready()
+        seen: set[str] = set()
         try:
-            timeline = self.api.user_tweets_and_replies(int(x_user_id))
+            timeline = self.api.user_tweets_and_replies_raw(int(x_user_id))
             async with aclosing(timeline):
-                async for tweet in timeline:
-                    # Conversation payloads can include another user's quoted/replied post.
-                    if str(tweet.user.id) != x_user_id:
-                        continue
-                    raw_payload = tweet.dict()
-                    if isinstance(raw_payload, dict):
-                        raw_payload.setdefault("id", str(tweet.id))
-                        raw_payload.setdefault("user", {
-                            "id": str(tweet.user.id),
-                            "username": getattr(tweet.user, "username", None),
-                        })
-                    yield parse_post(
-                        raw_payload,
-                        tweet_id=str(tweet.id),
-                        x_user_id=str(tweet.user.id),
-                        username=getattr(tweet.user, "username", None),
-                        text=getattr(tweet, "rawContent", ""),
-                        posted_at=tweet.date,
-                        permalink=tweet.url,
-                    )
+                async for response in timeline:
+                    payload = response.json()
+                    tweets = {str(tweet.id): tweet for tweet in parse_tweets(payload)}
+                    recovered = {}
+                    for tweet_id in _conversation_tweet_ids(payload):
+                        if tweet_id in tweets or tweet_id in recovered or tweet_id in seen:
+                            continue
+                        tweet = await self._fetch_conversation_tweet(tweet_id)
+                        if str(tweet.id) != tweet_id:
+                            raise TwscrapeResponseError(
+                                f"TweetDetail returned a different tweet for {tweet_id}"
+                            )
+                        recovered[tweet_id] = tweet
+
+                    # Complete collapsed conversations before yielding the visible
+                    # items: the sync service can stop on consecutive known posts.
+                    for tweet in (*recovered.values(), *tweets.values()):
+                        tweet_id = str(tweet.id)
+                        if tweet_id in seen:
+                            continue
+                        seen.add(tweet_id)
+                        # Conversation payloads can include other authors.
+                        if str(tweet.user.id) == x_user_id:
+                            yield _source_post_from_tweet(tweet)
         except NoAccountError as exc:
             retry_after = await _pool_retry_after(
                 self.api.pool,
@@ -601,3 +607,57 @@ class TwscrapePostSource:
             raise _pool_unavailable_error("UserTweetsAndReplies", retry_after) from exc
         except GqlFeaturesOutdatedError as exc:
             raise TwscrapeResponseError(str(exc)) from exc
+
+    async def _fetch_conversation_tweet(self, tweet_id: str) -> Tweet:
+        try:
+            tweet = await self.api.tweet_details(int(tweet_id))
+        except NoAccountError as exc:
+            retry_after = await _pool_retry_after(self.api.pool, "TweetDetail")
+            raise _pool_unavailable_error("TweetDetail", retry_after) from exc
+        if tweet is None:
+            # None can also mean an incomplete response or parsing failure;
+            # it is insufficient evidence that a timeline-listed tweet was deleted.
+            raise TwscrapeResponseError(
+                f"Could not read conversation tweet {tweet_id} from TweetDetail"
+            )
+        return tweet
+
+
+def _conversation_tweet_ids(payload: Any) -> Iterable[str]:
+    """Read collapsed conversation IDs, not arbitrary references or cursors."""
+    if isinstance(payload, Mapping):
+        metadata = payload.get("conversationMetadata")
+        if isinstance(metadata, Mapping):
+            identifiers = metadata.get("allTweetIds")
+            if isinstance(identifiers, list):
+                for identifier in identifiers:
+                    if (
+                        isinstance(identifier, str)
+                        and identifier.isascii()
+                        and identifier.isdecimal()
+                        and int(identifier) > 0
+                    ):
+                        yield identifier
+        for value in payload.values():
+            yield from _conversation_tweet_ids(value)
+    elif isinstance(payload, list):
+        for value in payload:
+            yield from _conversation_tweet_ids(value)
+
+
+def _source_post_from_tweet(tweet: Tweet) -> SourcePost:
+    raw_payload = tweet.dict()
+    raw_payload.setdefault("id", str(tweet.id))
+    raw_payload.setdefault("user", {
+        "id": str(tweet.user.id),
+        "username": getattr(tweet.user, "username", None),
+    })
+    return parse_post(
+        raw_payload,
+        tweet_id=str(tweet.id),
+        x_user_id=str(tweet.user.id),
+        username=getattr(tweet.user, "username", None),
+        text=getattr(tweet, "rawContent", ""),
+        posted_at=tweet.date,
+        permalink=tweet.url,
+    )

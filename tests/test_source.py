@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from twscrape.accounts_pool import NoAccountError
+from twscrape.models import parse_tweets
 from twscrape.queue_client import GqlFeaturesOutdatedError
 
 from archivex.source import (
@@ -41,7 +42,7 @@ class FakeApi:
     def __init__(self, timeline):
         self.timeline = timeline
 
-    def user_tweets_and_replies(self, x_user_id: int):
+    def user_tweets_and_replies_raw(self, x_user_id: int):
         assert x_user_id == 1
         return self.timeline
 
@@ -58,7 +59,7 @@ class NoAccountApi(FakeApi):
     def __init__(self):
         self.pool = LockedPool()
 
-    def user_tweets_and_replies(self, x_user_id: int):
+    def user_tweets_and_replies_raw(self, x_user_id: int):
         async def fail():
             raise NoAccountError("No account available")
             yield  # pragma: no cover
@@ -66,23 +67,193 @@ class NoAccountApi(FakeApi):
         return fail()
 
 
-class FakeTweet:
-    id = 10
-    user = SimpleNamespace(id=1, username="first")
-    retweetedTweet = None
-    quotedTweet = None
-    isQuoteStatus = False
-    inReplyToTweetId = None
-    rawContent = "post"
-    date = datetime(2026, 8, 8, tzinfo=UTC)
-    url = "https://x.com/first/status/10"
+def _tweet_result(tweet_id="10", author_id="1", reply_to=None):
+    legacy = {
+        "id_str": tweet_id,
+        "user_id_str": author_id,
+        "created_at": "Sat Aug 08 00:00:00 +0000 2026",
+        "full_text": f"post {tweet_id}",
+        "lang": "en",
+        "reply_count": 0,
+        "retweet_count": 0,
+        "favorite_count": 0,
+        "quote_count": 0,
+        "conversation_id_str": reply_to or tweet_id,
+        "entities": {},
+    }
+    if reply_to:
+        legacy["in_reply_to_status_id_str"] = reply_to
+        legacy["in_reply_to_user_id_str"] = author_id
+    return {
+        "__typename": "Tweet",
+        "rest_id": tweet_id,
+        "legacy": legacy,
+        "core": {"user_results": {"result": {
+            "__typename": "User",
+            "rest_id": author_id,
+            "legacy": {"screen_name": f"user{author_id}", "name": f"User {author_id}"},
+        }}},
+    }
 
-    def dict(self):
-        return {"id": "10", "media": {}}
+
+def _page(results, conversation_ids=()):
+    content = {
+        "entryType": "TimelineTimelineModule",
+        "displayType": "VerticalConversation",
+        "items": [{"item": {"itemContent": {"tweet_results": {"result": result}}}}
+                  for result in results],
+        "metadata": {"conversationMetadata": {"allTweetIds": list(conversation_ids)}},
+    }
+    payload = {"data": {"user": {"result": {"timeline": {"timeline": {
+        "instructions": [{"type": "TimelineAddEntries", "entries": [
+            {"entryId": "profile-conversation-10", "content": content},
+        ]}],
+    }}}}}}
+    return SimpleNamespace(json=lambda: payload)
+
+
+class ConversationApi(FakeApi):
+    def __init__(self, pages, details):
+        super().__init__(CloseTrackingTimeline(pages))
+        self.details = details
+        self.detail_calls = []
+
+    async def tweet_details(self, tweet_id):
+        self.detail_calls.append(str(tweet_id))
+        result = self.details[str(tweet_id)]
+        if isinstance(result, Exception):
+            raise result
+        if result is None:
+            return None
+        return next(parse_tweets(_page([result]).json()))
+
+
+def _conversation_source(api):
+    source = object.__new__(TwscrapePostSource)
+    source.api = api
+    source._recovery_checked = True
+    return source
+
+
+def test_collapsed_conversation_is_completed_before_visible_posts() -> None:
+    # Production-style response: the thread lists 18 IDs but only supplies
+    # the root and the last two replies as complete Tweet objects.
+    identifiers = [str(i) for i in range(100, 118)]
+    visible = [_tweet_result(i, reply_to="100" if i != "100" else None)
+               for i in ("100", "116", "117")]
+    api = ConversationApi(
+        [_page(visible, identifiers)],
+        {i: _tweet_result(i, reply_to="100") for i in identifiers[1:-2]},
+    )
+
+    async def collect():
+        return [post async for post in _conversation_source(api).fetch_timeline("1")]
+
+    posts = asyncio.run(collect())
+    assert {post.tweet_id for post in posts} == set(identifiers)
+    assert len(posts) == 18
+    assert api.detail_calls == identifiers[1:-2]
+    assert posts[0].tweet_id == "101"
+    assert posts[0].post_type == "reply"
+    assert posts[0].referenced.tweet_id == "100"
+    assert posts[0].text == "post 101"
+    assert api.timeline.close_called
+
+
+def test_conversation_ids_are_deduplicated_across_modules_and_pages() -> None:
+    first = _page([_tweet_result("10")], ["10", "11", "11", "12"])
+    first.json()["another_module"] = {
+        "conversationMetadata": {"allTweetIds": ["11", "12"]},
+    }
+    api = ConversationApi(
+        [first, _page([_tweet_result("11"), _tweet_result("12")], ["11", "12"])],
+        {"11": _tweet_result("11", reply_to="10"), "12": _tweet_result("12", "2")},
+    )
+
+    async def collect():
+        return [post async for post in _conversation_source(api).fetch_timeline("1")]
+
+    posts = asyncio.run(collect())
+    assert [post.tweet_id for post in posts] == ["11", "10"]
+    assert api.detail_calls == ["11", "12"]
+
+
+def test_conversation_recovery_happens_before_incremental_known_limit(tmp_path) -> None:
+    from archivex.storage import ArchiveRepository, initialize_storage
+    from archivex.sync import ArchiveSyncService
+
+    database = tmp_path / "archive.sqlite3"
+    archive = tmp_path / "archive"
+    initialize_storage(database, archive, tmp_path / "sessions")
+    repository = ArchiveRepository(database, archive)
+    repository.upsert_account("1", "user1")
+    visible = [_tweet_result(str(i)) for i in range(100, 121)]
+    for tweet in parse_tweets(_page(visible).json()):
+        repository.ingest_item(source_module._source_post_from_tweet(tweet), "1")
+    repository.mark_account_sync_success("1", datetime.now(UTC))
+    api = ConversationApi(
+        [_page(visible, ["100", "99"])],
+        {"99": _tweet_result("99", reply_to="100")},
+    )
+    service = ArchiveSyncService(repository, _conversation_source(api), -1, 20,
+                                 media_enabled=False)
+
+    result = asyncio.run(service.sync_account("1"))
+
+    assert result.status == "success"
+    assert result.posts_new == 1
+    assert repository.get_post("99").availability == "available"
+    assert repository.get_post("99").text == "post 99"
+    assert repository.get_account_details("1")["post_count"] == 22
+    assert api.timeline.close_called
+
+
+@pytest.mark.parametrize("failure", [None, GqlFeaturesOutdatedError("Update GQL_FEATURES")])
+def test_failed_conversation_detail_is_retryable_and_closes_timeline(failure) -> None:
+    api = ConversationApi([_page([_tweet_result()], ["10", "11"])], {"11": failure})
+    source = _conversation_source(api)
+
+    async def collect():
+        return [post async for post in source.fetch_timeline("1")]
+
+    with pytest.raises(source_module.TwscrapeResponseError):
+        asyncio.run(collect())
+    assert api.timeline.close_called
+
+
+def test_conversation_detail_account_lock_reports_detail_queue() -> None:
+    api = ConversationApi([_page([_tweet_result()], ["10", "11"])],
+                          {"11": NoAccountError("No account available")})
+
+    class DetailPool:
+        async def get_all(self):
+            return [SimpleNamespace(active=True, locks={
+                "TweetDetail": datetime.now(UTC).replace(microsecond=0),
+            })]
+
+    api.pool = DetailPool()
+    source = _conversation_source(api)
+    with pytest.raises(AccountPoolUnavailableError) as caught:
+        asyncio.run(anext(source.fetch_timeline("1")))
+    assert caught.value.queue == "TweetDetail"
+    assert caught.value.retry_after_seconds is not None
+    assert api.timeline.close_called
+
+
+def test_only_valid_conversation_metadata_ids_trigger_details() -> None:
+    page = _page([_tweet_result()], ["10", None, 11, "0", "abc", "１２", "-1"])
+    page.json()["unrelated"] = {"rest_id": "13", "allTweetIds": ["14"]}
+    api = ConversationApi([page], {})
+
+    async def collect():
+        return [post async for post in _conversation_source(api).fetch_timeline("1")]
+
+    assert len(asyncio.run(collect())) == 1
+    assert api.detail_calls == []
 
 
 def test_closing_source_timeline_closes_twscrape_timeline() -> None:
-    upstream = CloseTrackingTimeline([FakeTweet()])
+    upstream = CloseTrackingTimeline([_page([_tweet_result()])])
     source = object.__new__(TwscrapePostSource)
     source.api = FakeApi(upstream)
 
@@ -135,7 +306,7 @@ def test_twscrape_feature_error_remains_retryable(operation) -> None:
         async def user_by_login(self, username):
             raise GqlFeaturesOutdatedError("Update GQL_FEATURES")
 
-        def user_tweets_and_replies(self, x_user_id):
+        def user_tweets_and_replies_raw(self, x_user_id):
             async def fail():
                 raise GqlFeaturesOutdatedError("Update GQL_FEATURES")
                 yield  # pragma: no cover
