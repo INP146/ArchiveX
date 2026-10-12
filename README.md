@@ -67,7 +67,7 @@ rollback procedure is documented in
 
 ## Configuration
 
-`.env.example` is only for local development with `scripts/setup_venv.py`. The
+`.env.example` is for local development and release tooling. The
 Docker deployment does not use it: paths, queue topology, Redis connectivity,
 authentication, and runtime settings are all declared directly in
 the local `docker-compose.yml` copied from `docker-compose.build.yml`. Archive
@@ -193,6 +193,15 @@ the account-management page.
 
 ## Published container images
 
+Prepare a release with `python3 scripts/release.py prepare <version>`, then
+complete its release notes and validate with
+`python3 scripts/release.py check --require-notes`. Configure
+`RELEASE_AI_PROVIDER=codex` or `claude` in the local `.env` to let the installed
+agent inspect Git changes and source code in the repository and write the release
+notes directly; model and timeout settings are also read from `.env`.
+AI drafts require review before publication. See
+[the release workflow](.agents/RELEASE_AUTOMATION.md) for the full procedure.
+
 Pushing a version tag such as `v0.1.2-rc3` publishes two multi-platform images to
 GitHub Container Registry:
 
@@ -202,7 +211,13 @@ ghcr.io/inp146/archivex-web:0.1.2-rc3
 ```
 
 The repository path is derived by the workflow and converted to lowercase, so
-the workflow does not hard-code an owner account. The repository includes
+the workflow does not hard-code an owner account. Tests, a frontend build, and
+version/Compose validation must pass before images are published. Once both
+images have verified `amd64/arm64` manifests, the workflow creates a GitHub
+Release with a versioned Compose file and checksums; RC releases are marked
+as prereleases and do not update `latest`.
+
+The repository includes
 `docker-compose.ghcr.yml` for an image-only deployment. From the separate
 deployment directory, download the versioned file as `./docker-compose.yml`:
 

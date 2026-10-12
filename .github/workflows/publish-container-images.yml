@@ -1,4 +1,4 @@
-name: Publish container images
+name: Publish release
 
 on:
   push:
@@ -7,16 +7,26 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: publish-containers-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Validate release
+    uses: ./.github/workflows/validate.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+
   publish:
     name: Publish ${{ matrix.name }} image
+    needs: validate
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -77,3 +87,75 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
           provenance: mode=max
           sbom: true
+
+  release:
+    name: Verify images and create GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify both multi-platform images
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          repository="${GITHUB_REPOSITORY,,}"
+          for suffix in "" "-web"; do
+            image="ghcr.io/${repository}${suffix}:${version}"
+            docker buildx imagetools inspect "$image" --raw > manifest.json
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path("manifest.json").read_text())
+          platforms = {
+              (entry.get("platform", {}).get("os"), entry.get("platform", {}).get("architecture"))
+              for entry in manifest.get("manifests", [])
+          }
+          required = {("linux", "amd64"), ("linux", "arm64")}
+          if not required <= platforms:
+              raise SystemExit(f"Missing platforms: {required - platforms}")
+          PY
+            echo "Verified $image (linux/amd64, linux/arm64)"
+          done
+
+      - name: Create release with versioned Compose asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes=".agents/RELEASE_V${version^^}.md"
+          notes="${notes//-/_}"
+          mkdir -p release-assets
+          cp docker-compose.ghcr.yml release-assets/docker-compose.ghcr.yml
+          (cd release-assets && sha256sum docker-compose.ghcr.yml > SHA256SUMS)
+          flags=(--latest)
+          if [[ "$version" == *-rc* ]]; then
+            flags=(--prerelease --latest=false)
+          fi
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release already exists; keeping its notes and assets."
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "ArchiveX $GITHUB_REF_NAME" \
+              --notes-file "$notes" \
+              "${flags[@]}" \
+              release-assets/docker-compose.ghcr.yml release-assets/SHA256SUMS
+          fi
