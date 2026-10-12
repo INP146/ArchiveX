@@ -88,7 +88,10 @@ def media_from_payload(payload: Mapping[str, Any]) -> tuple[SourceMedia, ...]:
             if isinstance(v, Mapping) and isinstance(v.get("url"), str) and v["url"]
         ]
         if variants:
-            best = max(variants, key=lambda v: v.get("bitrate") or -1)
+            best = max(
+                variants,
+                key=lambda v: v["bitrate"] if v.get("bitrate") is not None else -1,
+            )
             append("video", best["url"])
     for animated in media.get("animated") or ():
         if isinstance(animated, Mapping):
