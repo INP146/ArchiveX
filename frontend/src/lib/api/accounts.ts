@@ -77,15 +77,26 @@ export function setAccountEnabled(xUserId: string, archiveEnabled: boolean) {
   });
 }
 
-export function syncAccount(xUserId: string) {
+export function syncAccount(xUserId: string, fullScan = false) {
   return apiFetch<{
     x_user_id: string;
     task_id: string;
     state: string;
     duplicate: boolean;
   }>(`/api/accounts/${xUserId}/sync`, {
-    method: "POST"
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ full_scan: fullScan })
   });
+}
+
+export function fullScanAccounts() {
+  return apiFetch<{
+    queued: number;
+    duplicates: number;
+    failed: number;
+    tasks: { x_user_id: string; task_id: string; state: string; duplicate: boolean }[];
+  }>("/api/accounts/full-scan", { method: "POST" });
 }
 
 export function getUsernameHistory(xUserId: string) {

@@ -56,6 +56,10 @@
 .x-profile-actions { display: flex; align-items: center; gap: 8px; padding-top: 12px; }
 .x-outline-button { border: 1px solid #536471; }
 .x-profile-actions button:disabled { opacity: .55; }
+.x-full-scan-button { display: inline-flex; height: 36px; align-items: center; justify-content: center; gap: 7px; padding: 0 12px; border: 1px solid #536471; border-radius: 999px; color: var(--x-text); font-size: 14px; font-weight: 700; white-space: nowrap; }
+.x-full-scan-button:hover { background: rgba(239, 243, 244, .1); }
+.x-full-scan-button svg { width: 16px; height: 16px; }
+.x-full-scan-status { margin: 0; padding: 0 16px 16px; }
 .x-archive-toggle { display: inline-flex; height: 36px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border: 1px solid #536471; border-radius: 999px; background: transparent; color: #eff3f4; font-size: 14px; font-weight: 700; text-align: center; }
 .x-archive-toggle:hover { background: rgba(239, 243, 244, .1); }
 .x-archive-toggle svg { width: 16px; height: 16px; }

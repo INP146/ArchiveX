@@ -70,9 +70,12 @@ class FakeTaskDispatcher:
     def __init__(self):
         self.calls = []
         self.media_calls = []
+        self.full_scan_calls = []
 
-    async def enqueue_account_sync(self, x_user_id, trigger="manual", retry_of=None):
+    async def enqueue_account_sync(self, x_user_id, trigger="manual", retry_of=None, *, full_scan=False):
         self.calls.append((x_user_id, trigger, retry_of))
+        if full_scan:
+            self.full_scan_calls.append((x_user_id, trigger, retry_of))
         return TaskSubmission("task-123", "queued", False)
 
     async def enqueue_media_download(
@@ -80,6 +83,64 @@ class FakeTaskDispatcher:
     ):
         self.media_calls.append((media_id, retry_of, parent_task_id))
         return TaskSubmission("media-task-123", "queued", False)
+
+
+def test_single_and_all_account_full_scans_preserve_paused_accounts_and_mode(tmp_path):
+    settings = _settings(tmp_path)
+    dispatcher = FakeTaskDispatcher()
+    with TestClient(create_app(settings, FakeSource(), FakeSessionAccountManager(), dispatcher)) as client:
+        repository = ArchiveRepository(settings.archive_db_path, settings.archive_data_dir)
+        repository.upsert_account("42", "example")
+        repository.upsert_account("43", "paused")
+        repository.set_account_enabled("43", False)
+        headers = {"Authorization": "Bearer test-token"}
+        assert client.post("/api/accounts/full-scan").status_code == 401
+        single = client.post("/api/accounts/42/sync", json={"full_scan": True}, headers=headers)
+        assert single.status_code == 202
+        assert dispatcher.full_scan_calls == [("42", "manual_full_scan", None)]
+
+        batch = client.post("/api/accounts/full-scan", headers=headers)
+        assert batch.status_code == 202
+        assert batch.json()["queued"] == 2
+        assert {task["x_user_id"] for task in batch.json()["tasks"]} == {"42", "43"}
+        assert repository.get_account("43").archive_enabled is False
+
+        import uuid
+        task_id = str(uuid.uuid4())
+        lifecycle = TaskCenterRepository(settings.archive_db_path, 3600, "archivex:crawl")
+        lifecycle.record_finished(
+            task_id, {TASK_OBSERVED_ACCOUNT_ID_LABEL: "43", "full_scan": True},
+            result=None, error="request failed", name="archivex.sync_account",
+            worker="archivex:crawl", args=["43", "manual_full_scan"], kwargs={"full_scan": True},
+        )
+        rerun = client.post(f"/api/task-center/tasks/{task_id}/rerun", headers=headers)
+        assert rerun.status_code == 202
+        assert dispatcher.full_scan_calls[-1] == ("43", "rerun", task_id)
+        retry = client.post("/api/task-center/failures/retry", headers=headers)
+        assert retry.status_code == 202
+        assert dispatcher.full_scan_calls[-1] == ("43", "failure_retry", task_id)
+
+
+def test_all_account_full_scan_reports_busy_and_failed_submissions(tmp_path):
+    settings = _settings(tmp_path)
+    class Dispatcher(FakeTaskDispatcher):
+        async def enqueue_account_sync(self, x_user_id, trigger="manual", retry_of=None, *, full_scan=False):
+            assert full_scan
+            if x_user_id == "43":
+                return TaskSubmission("busy-task", "queued", True)
+            if x_user_id == "44":
+                raise RuntimeError("queue unavailable")
+            return TaskSubmission("new-task", "queued", False)
+
+    with TestClient(create_app(settings, FakeSource(), FakeSessionAccountManager(), Dispatcher())) as client:
+        repository = ArchiveRepository(settings.archive_db_path, settings.archive_data_dir)
+        for identifier in ("42", "43", "44"):
+            repository.upsert_account(identifier, f"user{identifier}")
+        response = client.post("/api/accounts/full-scan", headers={"Authorization": "Bearer test-token"})
+        assert response.status_code == 202
+        assert {key: response.json()[key] for key in ("queued", "duplicates", "failed")} == {
+            "queued": 1, "duplicates": 1, "failed": 1,
+        }
 
 
 def _settings(tmp_path) -> Settings:

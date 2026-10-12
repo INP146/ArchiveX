@@ -23,6 +23,8 @@ class SyncTaskDispatcher(Protocol):
         x_user_id: str,
         trigger: str = "manual",
         retry_of: str | None = None,
+        *,
+        full_scan: bool = False,
     ) -> TaskSubmission: ...
 
     async def enqueue_media_download(
@@ -44,8 +46,10 @@ class InlineSyncTaskDispatcher:
         x_user_id: str,
         trigger: str = "manual",
         retry_of: str | None = None,
+        *,
+        full_scan: bool = False,
     ) -> TaskSubmission:
-        result = await self.service.sync_account(x_user_id)
+        result = await self.service.sync_account(x_user_id, full_scan=full_scan)
         return TaskSubmission(
             task_id=f"inline:{x_user_id}",
             state=result.status,
@@ -88,10 +92,12 @@ class TaskiqSyncTaskDispatcher:
         x_user_id: str,
         trigger: str = "manual",
         retry_of: str | None = None,
+        *,
+        full_scan: bool = False,
     ) -> TaskSubmission:
         from archivex.tasks import enqueue_account_sync
 
-        return await enqueue_account_sync(x_user_id, trigger, retry_of)
+        return await enqueue_account_sync(x_user_id, trigger, retry_of, full_scan=full_scan)
 
     async def enqueue_media_download(
         self,

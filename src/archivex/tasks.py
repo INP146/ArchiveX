@@ -575,6 +575,7 @@ async def _rollback_failed_publish(
     worker: str,
     args: list[Any],
     labels: dict[str, Any],
+    kwargs: dict[str, Any] | None = None,
 ) -> None:
     try:
         await _release_lock(key, task_id)
@@ -591,7 +592,7 @@ async def _rollback_failed_publish(
             name,
             worker,
             args,
-            {},
+            kwargs or {},
             labels,
             message,
         )
@@ -710,6 +711,8 @@ async def enqueue_account_sync(
     x_user_id: str,
     trigger: str = "manual",
     retry_of: str | None = None,
+    *,
+    full_scan: bool = False,
 ) -> TaskSubmission:
     task_id = str(uuid.uuid4())
     lock_key = _sync_lock_key(x_user_id)
@@ -721,6 +724,8 @@ async def enqueue_account_sync(
         TASK_OBSERVED_ACCOUNT_ID_LABEL: x_user_id,
         TASK_TRIGGER_LABEL: trigger,
     }
+    if full_scan:
+        task_labels["full_scan"] = True
     labels.update(task_labels)
     kicker = (
         sync_account_task.kicker()
@@ -731,7 +736,7 @@ async def enqueue_account_sync(
         labels["retry_of"] = retry_of
         kicker = kicker.with_labels(retry_of=retry_of)
     try:
-        await kicker.kiq(x_user_id, trigger)
+        await kicker.kiq(x_user_id, trigger, **({"full_scan": True} if full_scan else {}))
     except Exception as exc:
         await _rollback_failed_publish(
             lock_key,
@@ -740,6 +745,7 @@ async def enqueue_account_sync(
             name="archivex.sync_account",
             worker=settings.task_crawl_queue_name,
             args=[x_user_id, trigger],
+            kwargs={"full_scan": True} if full_scan else {},
             labels=labels,
         )
         raise
@@ -815,6 +821,7 @@ async def sync_account_task(
     x_user_id: str,
     trigger: str = "manual",
     context: Context = TaskiqDepends(),
+    full_scan: bool = False,
 ) -> dict[str, Any]:
     task_id = context.message.task_id
     lock_key = _sync_lock_key(x_user_id)
@@ -839,7 +846,7 @@ async def sync_account_task(
     )
     try:
         async with asyncio.timeout(settings.task_sync_timeout_seconds):
-            result = await service.sync_account(x_user_id)
+            result = await service.sync_account(x_user_id, full_scan=full_scan)
         await _extend_execution_lock(lock_key, task_id)
         media_queued, media_duplicates = await _enqueue_account_media(
             x_user_id,
@@ -857,6 +864,7 @@ async def sync_account_task(
     return {
         **result.__dict__,
         "trigger": trigger,
+        "full_scan": full_scan,
         "media_queued": media_queued,
         "media_duplicates": media_duplicates,
     }

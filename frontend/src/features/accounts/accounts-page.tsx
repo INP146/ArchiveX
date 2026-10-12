@@ -8,6 +8,7 @@ import {
   AccountSummary,
   addAccount,
   getAccounts,
+  fullScanAccounts,
   resolveAccount,
   ResolvedAccount
 } from "../../lib/api/accounts";
@@ -21,6 +22,10 @@ export function AccountsPage() {
   const [query, setQuery] = useState("");
   const [candidate, setCandidate] = useState<ResolvedAccount | null>(null);
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: getAccounts });
+  const fullScan = useMutation({
+    mutationFn: fullScanAccounts,
+    onSuccess: async () => { await queryClient.invalidateQueries(); }
+  });
   const resolve = useMutation({
     mutationFn: () => resolveAccount(query),
     onSuccess: setCandidate
@@ -54,16 +59,39 @@ export function AccountsPage() {
           <h1>归档账号</h1>
           <span>{accounts.data ? `${accounts.data.length} 个账号` : "所有账号"}</span>
         </div>
-        <button
-          type="button"
-          className="x-icon-button"
-          aria-label={adding ? "关闭添加账号" : "添加归档账号"}
-          title={adding ? "关闭" : "添加账号"}
-          onClick={() => adding ? closeAddPanel() : setAdding(true)}
-        >
-          {adding ? <FiX /> : <FiPlus />}
-        </button>
+        <div className="x-accounts-header-actions">
+          <button
+            type="button"
+            className="x-accounts-scan-button"
+            title="扫描所有归档账号（包含暂停账号）的全部可读取历史内容；X 接口可能无法提供全部历史帖子"
+            disabled={fullScan.isPending || !accounts.data?.length}
+            onClick={() => fullScan.mutate()}
+          >
+            <FiSearch aria-hidden="true" />
+            {fullScan.isPending ? "提交中" : "全部全量扫描"}
+          </button>
+          <button
+            type="button"
+            className="x-icon-button"
+            aria-label={adding ? "关闭添加账号" : "添加归档账号"}
+            title={adding ? "关闭" : "添加账号"}
+            onClick={() => adding ? closeAddPanel() : setAdding(true)}
+          >
+            {adding ? <FiX /> : <FiPlus />}
+          </button>
+        </div>
       </header>
+
+      <p className="x-accounts-scan-note">全量扫描会补查全部可读取的历史内容；全部扫描包含暂停账号，按队列执行。</p>
+      {fullScan.error && <InlineError error={fullScan.error} />}
+      {fullScan.data && (
+        <p className="x-accounts-scan-status" role="status">
+          已提交 {fullScan.data.queued} 个全量扫描任务
+          {fullScan.data.duplicates > 0 && `；${fullScan.data.duplicates} 个账号已有同步任务，请结束后重试`}
+          {fullScan.data.failed > 0 && `；${fullScan.data.failed} 个账号提交或执行失败，可重新提交`}
+          {" · "}<Link to="/tasks">查看任务</Link>
+        </p>
+      )}
 
       {adding && (
         <section className="x-account-add" aria-label="添加归档账号">

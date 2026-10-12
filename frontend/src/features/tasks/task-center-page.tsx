@@ -371,7 +371,7 @@ function TaskRow({ task }: { task: TaskRecord }) {
   const status = STATUS_META[task.status] ?? STATUS_META.unknown;
   return (
     <Link to="/tasks/$taskId" params={{ taskId: task.id }} className="x-task-row">
-      <span className="x-task-name"><strong>{taskLabel(task.name)}</strong><small>{taskSummary(task)}</small></span>
+      <span className="x-task-name"><strong>{taskLabel(task)}</strong><small>{taskSummary(task)}</small></span>
       <span><StatusBadge taskStatus={task.status} /></span>
       <span className="x-task-queue">{queueLabel(task.worker)}</span>
       <span className="x-task-duration">{formatDuration(task.duration_ms)}</span>
@@ -386,7 +386,7 @@ function TaskDetail({ task }: { task: TaskRecord }) {
     <div className="x-task-detail">
       <section className="x-task-detail-lead">
         <span className="x-task-detail-icon"><FiServer /></span>
-        <div><h2>{taskLabel(task.name)}</h2><code>{task.name}</code></div>
+        <div><h2>{taskLabel(task)}</h2><code>{task.name}</code></div>
         <StatusBadge taskStatus={task.status} />
       </section>
       <TaskSubject task={task} />
@@ -488,7 +488,10 @@ function TaskState({ message, error = false }: { message: string; error?: boolea
   return <div className={`x-task-state ${error ? "is-error" : ""}`}>{error ? <FiAlertCircle /> : <FiInbox />}<span>{message}</span></div>;
 }
 
-function taskLabel(name: string) { return TASK_NAMES[name] ?? name; }
+function taskLabel(task: TaskRecord) {
+  if (task.name === "archivex.sync_account" && (task.labels.full_scan === true || task.kwargs.full_scan === true)) return "账号全量扫描";
+  return TASK_NAMES[task.name] ?? task.name;
+}
 function taskSummary(task: TaskRecord) {
   const { account, media, post, post_author: author } = task.context;
   const accountLabel = account?.username ? `@${account.username}` : account?.display_name || account?.x_user_id;
@@ -520,6 +523,7 @@ function mediaTypeLabel(mediaType?: string) {
 function triggerLabel(trigger: string) {
   const labels: Record<string, string> = {
     manual: "手动同步",
+    manual_full_scan: "手动全量扫描",
     account_added: "新增账号",
     scheduled: "定时同步",
     schedule_manual: "手动运行计划",

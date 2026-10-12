@@ -42,6 +42,10 @@ class UpdateAccountRequest(BaseModel):
     archive_enabled: bool
 
 
+class SyncAccountRequest(BaseModel):
+    full_scan: bool = False
+
+
 class UpdateCrawlerAccountRequest(BaseModel):
     proxy: str | None = Field(default=None, max_length=2048)
 
@@ -189,15 +193,42 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
         return repository.get_account_details(x_user_id) or account.__dict__
 
     @router.post("/accounts/{x_user_id}/sync", status_code=status.HTTP_202_ACCEPTED)
-    async def sync_account(x_user_id: str) -> dict[str, Any]:
+    async def sync_account(
+        x_user_id: str, payload: SyncAccountRequest | None = None
+    ) -> dict[str, Any]:
         _validate_x_user_id(x_user_id)
         if repository.get_account(x_user_id) is None:
             raise HTTPException(status_code=404, detail="account not found")
         try:
-            submission = await task_dispatcher.enqueue_account_sync(x_user_id, "manual")
+            if payload and payload.full_scan:
+                submission = await task_dispatcher.enqueue_account_sync(
+                    x_user_id, "manual_full_scan", full_scan=True
+                )
+            else:
+                submission = await task_dispatcher.enqueue_account_sync(x_user_id, "manual")
         except Exception as exc:
             raise HTTPException(status_code=503, detail="task queue is unavailable") from exc
         return {"x_user_id": x_user_id, **submission.as_dict()}
+
+    @router.post("/accounts/full-scan", status_code=status.HTTP_202_ACCEPTED)
+    async def full_scan_accounts() -> dict[str, Any]:
+        result: dict[str, Any] = {"queued": 0, "duplicates": 0, "failed": 0, "tasks": []}
+        # Explicit manual scanning covers all archived accounts, including paused
+        # ones, without changing whether they participate in scheduled syncing.
+        for account in repository.list_accounts():
+            try:
+                submission = await task_dispatcher.enqueue_account_sync(
+                    account["x_user_id"], "manual_full_scan", full_scan=True
+                )
+                if submission.state == "error":
+                    result["failed"] += 1
+                else:
+                    result["duplicates" if submission.duplicate else "queued"] += 1
+                result["tasks"].append({"x_user_id": account["x_user_id"], **submission.as_dict()})
+            except Exception:
+                result["failed"] += 1
+                logger.exception("Could not queue full scan for X user %s", account["x_user_id"])
+        return result
 
     @router.get("/accounts/{x_user_id}/username-history")
     def username_history(x_user_id: str) -> list[dict[str, Any]]:
@@ -334,6 +365,7 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
                 account_id,
                 "rerun",
                 task["id"],
+                **({"full_scan": True} if _task_full_scan(task) else {}),
             )
             return submission.as_dict()
         if task["name"] == "archivex.download_media" and media_id:
@@ -363,11 +395,13 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
             x_user_id: str,
             trigger: str,
             retry_of: str | None = None,
+            full_scan: bool = False,
         ) -> None:
             submission = await task_dispatcher.enqueue_account_sync(
                 x_user_id,
                 trigger,
                 retry_of,
+                **({"full_scan": True} if full_scan else {}),
             )
             result["duplicates" if submission.duplicate else "queued"] += 1
 
@@ -384,13 +418,14 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
 
                 if task["name"] == "archivex.sync_account" and account_id:
                     account = repository.get_account(account_id)
-                    if account is None or not account.archive_enabled:
+                    if account is None or (not account.archive_enabled and not _task_full_scan(task)):
                         result["skipped_resolved"] += 1
                         continue
                     await enqueue_account(
                         account.x_user_id,
                         "failure_retry",
                         task["id"],
+                        full_scan=_task_full_scan(task),
                     )
                     continue
 
@@ -444,6 +479,10 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
     return router
 
 
+def _task_full_scan(task: dict[str, Any]) -> bool:
+    return task.get("labels", {}).get("full_scan") is True or task.get("kwargs", {}).get("full_scan") is True
+
+
 def _current_task_failures(
     task_center: TaskCenterRepository,
     repository: ArchiveRepository,
@@ -457,7 +496,7 @@ def _current_task_failures(
         media_id = _task_context_id(task, "media", "id")
         if task["name"] == "archivex.sync_account" and account_id:
             account = repository.get_account(account_id)
-            if account is None or not account.archive_enabled:
+            if account is None or (not account.archive_enabled and not _task_full_scan(task)):
                 continue
         elif task["name"] == "archivex.download_media" and media_id:
             media = repository.get_media_record(media_id)

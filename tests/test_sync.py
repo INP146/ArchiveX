@@ -176,6 +176,23 @@ def test_unlimited_initial_sync_imports_all_posts(tmp_path) -> None:
     assert (result.status, result.posts_seen, result.posts_new) == ("success", 2, 2)
 
 
+def test_full_scan_bypasses_initial_and_incremental_limits_without_changing_defaults(tmp_path):
+    account = SourceAccount("1", "first", "First")
+    posts = [_post(str(i), datetime(2026, 8, 5, tzinfo=UTC)) for i in range(5, 0, -1)]
+    source = FakeSource({"first": account}, {"1": posts})
+    service = _service(tmp_path, source, initial_post_limit=1, incremental_known_post_limit=1)
+
+    first = asyncio.run(service.sync_account("1", full_scan=True))
+    assert (first.posts_seen, first.posts_new) == (5, 5)
+    source.posts["1"].append(_post("6", datetime(2020, 1, 1, tzinfo=UTC)))
+    ordinary = asyncio.run(service.sync_account("1"))
+    assert (ordinary.posts_seen, ordinary.posts_new) == (1, 0)
+    full = asyncio.run(service.sync_account("1", full_scan=True))
+    assert (full.posts_seen, full.posts_new) == (6, 1)
+    assert service.repository.get_post("6") is not None
+    assert service.initial_post_limit == service.incremental_known_post_limit == 1
+
+
 def test_incremental_sync_stops_after_configured_consecutive_known_posts(tmp_path) -> None:
     account = SourceAccount("1", "first", "First")
     source = FakeSource({"first": account}, {"1": [

@@ -9,6 +9,7 @@ import {
   FiPause,
   FiPlay,
   FiRefreshCw,
+  FiSearch,
   FiUser
 } from "react-icons/fi";
 
@@ -57,6 +58,10 @@ export function AccountPage() {
       await queryClient.invalidateQueries();
     }
   });
+  const fullScan = useMutation({
+    mutationFn: () => syncAccount(xUserId, true),
+    onSuccess: async () => { await queryClient.invalidateQueries(); }
+  });
 
   function selectTab(tab: AccountTimelineTab) {
     setActiveTab(tab);
@@ -103,10 +108,20 @@ export function AccountPage() {
                 type="button"
                 aria-label="立即同步"
                 title="立即同步"
-                disabled={sync.isPending}
-                onClick={() => sync.mutate()}
+                disabled={sync.isPending || fullScan.isPending}
+                onClick={() => { fullScan.reset(); sync.mutate(); }}
               >
                 <FiRefreshCw className={sync.isPending ? "is-spinning" : ""} />
+              </button>
+              <button
+                className="x-full-scan-button"
+                type="button"
+                title="重新扫描全部可读取的历史内容，补查遗漏；X 接口可能无法提供全部历史帖子"
+                disabled={sync.isPending || fullScan.isPending}
+                onClick={() => { sync.reset(); fullScan.mutate(); }}
+              >
+                <FiSearch aria-hidden="true" />
+                <span>{fullScan.isPending ? "提交中" : "全量扫描"}</span>
               </button>
               <button
                 className="x-archive-toggle"
@@ -149,9 +164,9 @@ export function AccountPage() {
               ))}
             </div>
           )}
-          {(sync.error || toggleArchive.error) && (
+          {(sync.error || fullScan.error || toggleArchive.error) && (
             <p className="x-profile-action-error">
-              {(sync.error ?? toggleArchive.error)?.message}
+              {(sync.error ?? fullScan.error ?? toggleArchive.error)?.message}
             </p>
           )}
           {sync.data && (
@@ -166,6 +181,15 @@ export function AccountPage() {
         </div>
       </section>
 
+      {fullScan.data && (
+        <p className="x-profile-action-status x-full-scan-status" role="status">
+          {fullScan.data.duplicate
+            ? "账号已有同步任务，未新建全量扫描；请在该任务结束后重试"
+            : "全量扫描任务已加入队列，可在任务详情查看结果"}
+          {" · "}
+          <Link to="/tasks/$taskId" params={{ taskId: fullScan.data.task_id }}>查看任务</Link>
+        </p>
+      )}
       <nav className="x-tabs" aria-label="账号内容">
         <TabButton active={activeTab === "posts"} onClick={() => selectTab("posts")}>帖子</TabButton>
         <TabButton active={activeTab === "replies"} onClick={() => selectTab("replies")}>回复</TabButton>

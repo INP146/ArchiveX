@@ -61,13 +61,13 @@ class ArchiveSyncService:
             results.append(await self.sync_account(x_user_id))
         return results
 
-    async def sync_account(self, x_user_id: str) -> AccountSyncResult:
+    async def sync_account(self, x_user_id: str, *, full_scan: bool = False) -> AccountSyncResult:
         loop_key = (id(asyncio.get_running_loop()), x_user_id)
         lock = self._account_locks.setdefault(loop_key, asyncio.Lock())
         async with lock:
-            return await self._sync_account(x_user_id)
+            return await self._sync_account(x_user_id, full_scan=full_scan)
 
-    async def _sync_account(self, x_user_id: str) -> AccountSyncResult:
+    async def _sync_account(self, x_user_id: str, *, full_scan: bool = False) -> AccountSyncResult:
         account = self.repository.get_account(x_user_id)
         if account is None:
             return AccountSyncResult(
@@ -98,7 +98,7 @@ class ArchiveSyncService:
                 await self._retry_failed_media(x_user_id)
             async with aclosing(self.source.fetch_timeline(x_user_id)) as timeline:
                 async for post in timeline:
-                    if is_initial_sync and 0 <= self.initial_post_limit <= posts_seen:
+                    if not full_scan and is_initial_sync and 0 <= self.initial_post_limit <= posts_seen:
                         break
                     if post.x_user_id != x_user_id:
                         raise ValueError(
@@ -123,7 +123,8 @@ class ArchiveSyncService:
                         for owner_tweet_id in ingested.content_ids:
                             await self._download_post_media(owner_tweet_id)
                     if (
-                        not is_initial_sync
+                        not full_scan
+                        and not is_initial_sync
                         and self.incremental_known_post_limit != -1
                         and consecutive_known_posts >= self.incremental_known_post_limit
                     ):

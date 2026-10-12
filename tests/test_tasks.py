@@ -75,6 +75,7 @@ class FakeTask:
         self.should_fail = should_fail
         self.task_id = None
         self.calls = []
+        self.kwargs = []
         self.labels = {
             "queue_name": "archivex:crawl",
             "retry_on_error": True,
@@ -93,8 +94,9 @@ class FakeTask:
         self.labels.update(labels)
         return self
 
-    async def kiq(self, *args):
+    async def kiq(self, *args, **kwargs):
         self.calls.append((self.task_id, args))
+        self.kwargs.append(kwargs)
         if self.should_fail:
             raise RuntimeError("redis unavailable")
 
@@ -692,6 +694,63 @@ def test_account_enqueue_coalesces_duplicate_tasks(monkeypatch) -> None:
     assert len(fake_task.calls) == 1
     assert fake_task.labels[tasks.TASK_OBSERVED_ACCOUNT_ID_LABEL] == "42"
     assert fake_task.labels[tasks.TASK_TRIGGER_LABEL] == "manual"
+
+
+def test_full_scan_enqueue_serializes_mode_and_shares_account_lock(monkeypatch):
+    fake_redis = FakeRedis()
+    fake_task = FakeTask()
+    monkeypatch.setattr(tasks, "_redis", lambda: fake_redis)
+    monkeypatch.setattr(tasks, "sync_account_task", fake_task)
+
+    async def submit():
+        full = await tasks.enqueue_account_sync("42", "manual_full_scan", full_scan=True)
+        duplicate = await tasks.enqueue_account_sync("42")
+        return full, duplicate
+
+    full, duplicate = asyncio.run(submit())
+    assert full.duplicate is False
+    assert duplicate.task_id == full.task_id and duplicate.duplicate is True
+    assert fake_task.kwargs == [{"full_scan": True}]
+    assert fake_task.labels["full_scan"] is True
+
+
+def test_full_scan_publish_failure_keeps_mode_for_manual_retry(monkeypatch, tmp_path):
+    repository = task_repository(tmp_path / "archive.sqlite3")
+    monkeypatch.setattr(tasks, "_redis", lambda: FakeRedis())
+    fake_task = FakeTask(should_fail=True)
+    monkeypatch.setattr(tasks, "sync_account_task", fake_task)
+    monkeypatch.setattr(tasks, "_task_center_repository", lambda: repository)
+    with pytest.raises(RuntimeError, match="redis unavailable"):
+        asyncio.run(tasks.enqueue_account_sync("42", "manual_full_scan", full_scan=True))
+    failed = repository.get_task(fake_task.task_id)
+    assert failed["kwargs"] == {"full_scan": True}
+    assert failed["labels"]["full_scan"] is True
+
+
+def test_full_scan_worker_passes_mode_to_sync_service(monkeypatch):
+    from archivex.sync import AccountSyncResult
+    captured = []
+    class Service:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def sync_account(self, x_user_id, *, full_scan=False):
+            captured.append(full_scan)
+            return AccountSyncResult(x_user_id, "example", "success")
+
+    async def succeed(*args):
+        return True
+    async def media(*args):
+        return 0, 0
+    monkeypatch.setattr(tasks, "ArchiveSyncService", Service)
+    monkeypatch.setattr(tasks, "TwscrapePostSource", lambda *args, **kwargs: object())
+    monkeypatch.setattr(tasks, "_repository", lambda: object())
+    for name in ("_claim_execution", "_extend_execution_lock", "_release_lock"):
+        monkeypatch.setattr(tasks, name, succeed)
+    monkeypatch.setattr(tasks, "_enqueue_account_media", media)
+    context = SimpleNamespace(message=SimpleNamespace(task_id=str(uuid.uuid4())))
+    result = asyncio.run(tasks.sync_account_task.original_func("42", context=context, full_scan=True))
+    assert captured == [True]
+    assert result["full_scan"] is True
 
 
 def test_media_enqueue_carries_parent_and_retry_relationships(monkeypatch) -> None:

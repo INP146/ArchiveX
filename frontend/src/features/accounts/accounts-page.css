@@ -43,6 +43,13 @@
   background: #080808;
 }
 
+.x-accounts-header .x-accounts-header-actions { flex-direction: row; align-items: center; gap: 8px; }
+.x-accounts-scan-button { display: inline-flex; height: 34px; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid #536471; border-radius: 999px; color: var(--x-text); font-size: 13px; font-weight: 700; white-space: nowrap; }
+.x-accounts-scan-button:hover { background: rgba(239, 243, 244, .1); }
+.x-accounts-scan-button:disabled { opacity: .55; }
+.x-accounts-scan-note, .x-accounts-scan-status { margin: 0; padding: 12px 16px; color: var(--x-muted); font-size: 13px; line-height: 20px; border-bottom: 1px solid var(--x-border); }
+.x-accounts-scan-status a { color: var(--x-accent); }
+
 .x-account-lookup {
   display: grid;
   height: 44px;
