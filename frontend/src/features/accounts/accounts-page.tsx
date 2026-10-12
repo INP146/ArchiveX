@@ -52,6 +52,19 @@ export function AccountsPage() {
     resolve.mutate();
   }
 
+  function requestFullScan() {
+    if (fullScan.isPending || !accounts.data?.length) return;
+
+    const pausedCount = accounts.data.filter((account) => !account.archive_enabled).length;
+    const scope = pausedCount > 0 ? `（包含 ${pausedCount} 个暂停账号）` : "";
+    const confirmed = window.confirm(
+      `确定对全部 ${accounts.data.length} 个归档账号${scope}执行全量扫描吗？\n\n` +
+      "将从头遍历每个账号全部可读取的历史内容，产生大量请求；新发现的媒体也会下载。任务可能耗时较长，并持续占用抓取队列。\n\n" +
+      "点击“确定”开始，点击“取消”不提交任务。"
+    );
+    if (confirmed) fullScan.mutate();
+  }
+
   return (
     <div className="x-accounts-page">
       <header className="x-accounts-header">
@@ -65,7 +78,7 @@ export function AccountsPage() {
             className="x-accounts-scan-button"
             title="扫描所有归档账号（包含暂停账号）的全部可读取历史内容；X 接口可能无法提供全部历史帖子"
             disabled={fullScan.isPending || !accounts.data?.length}
-            onClick={() => fullScan.mutate()}
+            onClick={requestFullScan}
           >
             <FiSearch aria-hidden="true" />
             {fullScan.isPending ? "提交中" : "全部全量扫描"}
