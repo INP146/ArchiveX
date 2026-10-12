@@ -14,17 +14,14 @@ import {
   FiX
 } from "react-icons/fi";
 
-import { Account } from "../lib/api/accounts";
 import { SessionUser } from "../lib/api/auth";
 
 export function ArchiveSidebar({
-  account,
   accountCount,
   viewer,
   onLogout,
   onManageAccounts
 }: {
-  account?: Account;
   accountCount: number;
   viewer?: SessionUser | null;
   onLogout: () => void;
@@ -33,14 +30,12 @@ export function ArchiveSidebar({
   const location = useRouterState({ select: (state) => state.location });
   const pathname = location.pathname;
   const normalizedHash = location.hash.replace(/^#/, "");
-  const profilePath = account ? `/accounts/${account.x_user_id}` : "/accounts";
-  const mediaPath = account ? `${profilePath}#media` : "/accounts";
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const homeActive = pathname === "/";
   const searchActive = pathname === "/search";
-  const mediaActive = pathname.startsWith("/accounts/") && normalizedHash === "media";
-  const accountsActive = pathname.startsWith("/accounts") && !mediaActive;
+  const mediaActive = pathname === "/media";
+  const accountsActive = pathname.startsWith("/accounts");
   const tasksActive = pathname.startsWith("/tasks");
 
   useEffect(() => {
@@ -65,7 +60,7 @@ export function ArchiveSidebar({
             <Link to="/" className={`x-sidebar-item ${homeActive ? "is-active" : ""}`}><FiHome /><span>主页</span></Link>
             <Link to="/search" className={`x-sidebar-item ${searchActive ? "is-active" : ""}`}><FiSearch /><span>搜索</span></Link>
             <Link to="/accounts" className={`x-sidebar-item ${accountsActive ? "is-active" : ""}`}><FiUsers /><span>归档账号</span></Link>
-            <a href={mediaPath} className={`x-sidebar-item ${mediaActive ? "is-active" : ""}`}><FiImage /><span>媒体库</span></a>
+            <Link to="/media" className={`x-sidebar-item ${mediaActive ? "is-active" : ""}`}><FiImage /><span>媒体库</span></Link>
             <Link to="/tasks" className={`x-sidebar-item ${tasksActive ? "is-active" : ""}`}><FiServer /><span>任务中心</span></Link>
             <Link to="/settings" className={`x-sidebar-item ${pathname === "/settings" ? "is-active" : ""}`}><FiSettings /><span>设置</span></Link>
           </nav>
@@ -139,15 +134,15 @@ export function ArchiveSidebar({
         >
           <FiUsers /><span>归档账号</span>
         </Link>
-        <a
-          href={mediaPath}
+        <Link
+          to="/media"
           className={`x-mobile-bottom-item ${mediaActive ? "is-active" : ""}`}
           aria-label="媒体库"
           aria-current={mediaActive ? "page" : undefined}
           title="媒体库"
         >
           <FiImage /><span>媒体库</span>
-        </a>
+        </Link>
         <Link
           to="/tasks"
           className={`x-mobile-bottom-item ${tasksActive ? "is-active" : ""}`}
@@ -196,7 +191,7 @@ export function ArchiveSidebar({
               <Link to="/"><FiHome /><span>主页</span></Link>
               <Link to="/search"><FiSearch /><span>搜索</span></Link>
               <Link to="/accounts"><FiUsers /><span>归档账号</span></Link>
-              <a href={mediaPath}><FiImage /><span>媒体库</span></a>
+              <Link to="/media"><FiImage /><span>媒体库</span></Link>
               <Link to="/tasks"><FiServer /><span>任务中心</span></Link>
               <Link to="/settings"><FiSettings /><span>设置</span></Link>
             </nav>

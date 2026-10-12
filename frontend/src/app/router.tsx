@@ -14,11 +14,15 @@ import { AccountPage } from "../features/accounts/account-page";
 import { AccountsPage } from "../features/accounts/accounts-page";
 import { LoginPage } from "../features/auth/login-page";
 import { DashboardPage } from "../features/dashboard/dashboard-page";
+import { PostPage } from "../features/timeline/post-page";
+import { MediaPage } from "../features/timeline/media-page";
 import { SearchPage } from "../features/search/search-page";
 import { SettingsPage } from "../features/settings/settings-page";
 import { TaskDetailsPage, TaskListPage, TaskSchedulesPage } from "../features/tasks/task-center-page";
 import { ArchiveSidebar } from "../components/archive-sidebar";
-import { getAccount, getAccounts } from "../lib/api/accounts";
+import { ArchiveLinksProvider } from "../components/archive-author-link";
+import { getAccounts } from "../lib/api/accounts";
+import { parseArchiveSearch, stringifyArchiveSearch, validatePostSearch, validateTaskSearch } from "../lib/navigation-search";
 import { deleteSession, getSession } from "../lib/api/auth";
 import "./archive-shell.css";
 
@@ -60,10 +64,23 @@ const accountsRoute = createRoute({
   component: AccountsPage
 });
 
+const postRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/posts/$tweetId",
+  component: PostPage
+});
+
 const searchRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/search",
+  validateSearch: validatePostSearch,
   component: SearchPage
+});
+
+const mediaRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/media",
+  component: MediaPage
 });
 
 const settingsRoute = createRoute({
@@ -75,6 +92,7 @@ const settingsRoute = createRoute({
 const tasksRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tasks",
+  validateSearch: validateTaskSearch,
   component: TaskListPage
 });
 
@@ -96,6 +114,8 @@ const routeTree = rootRoute.addChildren([
   searchRoute,
   accountsRoute,
   accountRoute,
+  postRoute,
+  mediaRoute,
   settingsRoute,
   tasksRoute,
   taskDetailsRoute,
@@ -104,6 +124,10 @@ const routeTree = rootRoute.addChildren([
 
 export const router = createRouter({
   routeTree,
+  parseSearch: parseArchiveSearch,
+  stringifySearch: stringifyArchiveSearch,
+  scrollRestoration: true,
+  scrollToTopSelectors: [".x-app-content", ".x-profile-column"],
   context: { queryClient }
 });
 
@@ -128,12 +152,6 @@ function AppShell() {
     queryKey: ["accounts"],
     queryFn: getAccounts,
     enabled: session.data?.authenticated === true
-  });
-  const primaryAccountId = accounts.data?.[0]?.x_user_id;
-  const primaryAccount = useQuery({
-    queryKey: ["account", primaryAccountId],
-    queryFn: () => getAccount(String(primaryAccountId)),
-    enabled: primaryAccountId !== undefined
   });
   const logout = useMutation({
     mutationFn: deleteSession,
@@ -190,19 +208,20 @@ function AppShell() {
   const operationsView = pathname.startsWith("/tasks");
 
   return (
-    <div
-      className={`x-app-shell ${operationsView ? "is-operations" : ""} ${mobileHeaderHidden ? "is-mobile-header-hidden" : ""}`}
-      onScrollCapture={handleAppScroll}
-    >
-      <ArchiveSidebar
-        account={primaryAccount.data}
-        accountCount={accounts.data?.length ?? 0}
-        viewer={session.data?.user}
-        onLogout={() => logout.mutate()}
-        onManageAccounts={() => void router.navigate({ to: "/accounts" })}
-      />
-      <main className="x-app-content"><Outlet /></main>
-      <aside className="x-empty-rail x-empty-rail-right" aria-hidden="true" />
-    </div>
+    <ArchiveLinksProvider accounts={accounts.data}>
+      <div
+        className={`x-app-shell ${operationsView ? "is-operations" : ""} ${mobileHeaderHidden ? "is-mobile-header-hidden" : ""}`}
+        onScrollCapture={handleAppScroll}
+      >
+        <ArchiveSidebar
+          accountCount={accounts.data?.length ?? 0}
+          viewer={session.data?.user}
+          onLogout={() => logout.mutate()}
+          onManageAccounts={() => void router.navigate({ to: "/accounts" })}
+        />
+        <main className="x-app-content"><Outlet /></main>
+        <aside className="x-empty-rail x-empty-rail-right" aria-hidden="true" />
+      </div>
+    </ArchiveLinksProvider>
   );
 }

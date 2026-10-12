@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { Link, useNavigate, useRouter, useSearch } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { ArchiveAuthorLink } from "../../components/archive-author-link";
+import { getAccounts } from "../../lib/api/accounts";
+import type { TaskSearch } from "../../lib/navigation-search";
 import {
   FiActivity,
   FiAlertCircle,
@@ -60,19 +62,27 @@ const TASK_NAMES: Record<string, string> = {
 
 export function TaskListPage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const pageSize = 50;
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<TaskStatus | null>(null);
-  const [page, setPage] = useState(0);
+  const search = useSearch({ from: "/tasks" });
+  const query = search.q ?? "";
+  const status = search.status ?? null;
+  const page = search.page ?? 0;
+  const accountId = search.account;
+  const accounts = useQuery({ queryKey: ["accounts"], queryFn: getAccounts });
+  const account = accounts.data?.find((item) => item.x_user_id === accountId);
+  function updateFilters(patch: Partial<TaskSearch>, replace = false) {
+    void navigate({ to: "/tasks", search: { ...search, ...patch }, replace });
+  }
   const summary = useQuery({
-    queryKey: ["task-center", "summary"],
-    queryFn: getTaskSummary,
+    queryKey: ["task-center", "summary", accountId],
+    queryFn: () => getTaskSummary(accountId),
     refetchInterval: 2_000,
     staleTime: 0
   });
   const tasks = useQuery({
-    queryKey: ["task-center", "list", query, status, page],
-    queryFn: () => getTasks(query, status, page * pageSize, pageSize),
+    queryKey: ["task-center", "list", accountId, query, status, page],
+    queryFn: () => getTasks(query, status, page * pageSize, pageSize, accountId),
     refetchInterval: 2_000,
     staleTime: 0,
     gcTime: 0
@@ -86,19 +96,18 @@ export function TaskListPage() {
   const clearHistory = useMutation({
     mutationFn: (historyStatus?: TerminalTaskStatus) => clearTaskHistory(historyStatus),
     onSuccess: async () => {
-      setPage(0);
+      updateFilters({ page: undefined }, true);
       await queryClient.invalidateQueries({ queryKey: ["task-center"] });
     }
   });
 
   const selectStatus = (value: TaskStatus | null) => {
     clearHistory.reset();
-    setStatus(value);
-    setPage(0);
+    updateFilters({ status: value ?? undefined, page: undefined });
   };
 
   const historyStatus = terminalTaskStatus(status);
-  const canClearHistory = status === null || historyStatus !== undefined;
+  const canClearHistory = !accountId && (status === null || historyStatus !== undefined);
   const historyCount = status === null
     ? terminalTaskCount(summary.data?.counts)
     : (summary.data?.counts[status] ?? 0);
@@ -106,7 +115,7 @@ export function TaskListPage() {
     ? "已结束记录"
     : `${STATUS_META[status]?.label ?? "任务"}记录`;
   const requestHistoryClear = () => {
-    if (!window.confirm(`确定清除全部${historyLabel}？此操作不可撤销。`)) return;
+    if (accountId || !window.confirm(`确定清除全部${historyLabel}？此操作不可撤销。`)) return;
     clearHistory.mutate(historyStatus);
   };
 
@@ -129,6 +138,11 @@ export function TaskListPage() {
       />
       <TaskNavigation active="tasks" />
 
+      {accountId && <div className="x-scope-links" aria-label="任务范围">
+        <span>账号任务：<Link to="/accounts/$xUserId" params={{ xUserId: accountId }}>{account?.display_name ?? account?.current_username ?? `账号 ${accountId}`}</Link></span>
+        <Link to="/tasks" search={{}}>查看全部任务</Link>
+      </div>}
+
       <section className="x-task-metrics" aria-label="队列状态概览">
         <Metric icon={<FiActivity />} label="运行中" value={summary.data?.counts.in_progress} tone="running" active={status === "in_progress"} onClick={() => selectStatus("in_progress")} />
         <Metric icon={<FiInbox />} label="等待中" value={summary.data?.counts.queued} tone="queued" active={status === "queued"} onClick={() => selectStatus("queued")} />
@@ -143,7 +157,8 @@ export function TaskListPage() {
           <FiSearch aria-hidden="true" />
           <input
             value={query}
-            onChange={(event) => { setQuery(event.target.value); setPage(0); }}
+            maxLength={200}
+            onChange={(event) => updateFilters({ q: event.target.value || undefined, page: undefined }, true)}
             placeholder="搜索任务名称或 ID"
             aria-label="搜索任务"
           />
@@ -162,7 +177,7 @@ export function TaskListPage() {
         </div>
       </section>
 
-      {status === "failure" && (
+      {status === "failure" && !accountId && (
         <section className="x-task-failure-action" aria-live="polite">
           <div>
             <strong>{summary.data?.counts.failure ?? 0} 条失败记录</strong>
@@ -189,12 +204,12 @@ export function TaskListPage() {
           </div>
         </section>
       )}
-      {status === "failure" && retryFailures.data && (
+      {status === "failure" && !accountId && retryFailures.data && (
         <div className={retryFailures.data.failed ? "x-task-action-error" : "x-task-action-success"}>
           {failureRetryMessage(retryFailures.data)}
         </div>
       )}
-      {status === "failure" && retryFailures.error && (
+      {status === "failure" && !accountId && retryFailures.error && (
         <div className="x-task-action-error">{retryFailures.error.message}</div>
       )}
       {canClearHistory && status !== "failure" && (
@@ -232,8 +247,8 @@ export function TaskListPage() {
           <div className="x-task-pagination">
             <span>第 {page + 1} 页 · 共 {tasks.data.total} 条</span>
             <div>
-              <button type="button" disabled={page === 0} onClick={() => setPage((value) => value - 1)} aria-label="上一页" title="上一页"><FiChevronLeft /></button>
-              <button type="button" disabled={(page + 1) * pageSize >= tasks.data.total} onClick={() => setPage((value) => value + 1)} aria-label="下一页" title="下一页"><FiChevronRight /></button>
+              <button type="button" disabled={page === 0} onClick={() => updateFilters({ page: page > 1 ? page - 1 : undefined })} aria-label="上一页" title="上一页"><FiChevronLeft /></button>
+              <button type="button" disabled={(page + 1) * pageSize >= tasks.data.total} onClick={() => updateFilters({ page: page + 1 })} aria-label="下一页" title="下一页"><FiChevronRight /></button>
             </div>
           </div>
         )}
@@ -244,6 +259,7 @@ export function TaskListPage() {
 
 export function TaskDetailsPage({ taskId }: { taskId: string }) {
   const navigate = useNavigate();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const task = useQuery({
     queryKey: ["task-center", "detail", taskId],
@@ -264,9 +280,12 @@ export function TaskDetailsPage({ taskId }: { taskId: string }) {
   return (
     <div className="x-task-page">
       <header className="x-task-header x-task-detail-header">
-        <Link to="/tasks" className="x-task-back" aria-label="返回任务列表" title="返回">
+        <button type="button" className="x-task-back" aria-label="返回上一页" title="返回" onClick={() => {
+          if (router.history.canGoBack()) router.history.back();
+          else void navigate({ to: "/tasks" });
+        }}>
           <FiArrowLeft />
-        </Link>
+        </button>
         <div><h1>任务详情</h1><span>{shortId(taskId)}</span></div>
         {task.data && canRerunTask(task.data) && (
           <button
@@ -437,7 +456,7 @@ function TaskDetail({ task }: { task: TaskRecord }) {
 
 function TaskSubject({ task }: { task: TaskRecord }) {
   const { account, media, post, post_author: author } = task.context;
-  if (!account && !media) return null;
+  if (!account && !media && !post) return null;
 
   return (
     <section className="x-task-subject">
@@ -450,15 +469,17 @@ function TaskSubject({ task }: { task: TaskRecord }) {
             {account.username && <small>@{account.username}</small>}
           </Link>
         )}
-        {author && <span>内容作者：{author.display_name ?? author.username ?? author.x_user_id}</span>}
+        {author && <span>内容作者：<ArchiveAuthorLink author={author}>{author.display_name ?? author.username ?? author.x_user_id}</ArchiveAuthorLink></span>}
         {media && <code>{media.id}</code>}
       </div>
       <div className="x-task-subject-links">
         {post && (
-          <a href={post.permalink} target="_blank" rel="noreferrer">
-            <FiExternalLink /><span>帖子 {post.tweet_id}</span>
-          </a>
+          <>
+            <Link to="/posts/$tweetId" params={{ tweetId: post.tweet_id }}>帖子 {post.tweet_id}</Link>
+            <a href={post.permalink} target="_blank" rel="noreferrer"><FiExternalLink /><span>打开 X 原帖</span></a>
+          </>
         )}
+        {account && <Link to="/tasks" search={{ account: account.x_user_id }}>账号任务</Link>}
         {media?.source_url && (
           <a href={media.source_url} target="_blank" rel="noreferrer">
             <FiExternalLink /><span>媒体源</span>

@@ -469,6 +469,71 @@ def test_manual_sync_enqueues_without_waiting_for_the_source(tmp_path) -> None:
     assert source.calls == []
 
 
+def test_account_task_filter_scopes_rows_pagination_and_counts(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    with TestClient(create_app(settings, FakeSource(), FakeSessionAccountManager(), FakeTaskDispatcher())) as client:
+        repository = ArchiveRepository(settings.archive_db_path, settings.archive_data_dir)
+        repository.upsert_account("42", "example")
+        repository.upsert_account("142", "other42")
+        lifecycle = TaskCenterRepository(settings.archive_db_path,
+            settings.archive_sync_interval_seconds, settings.task_crawl_queue_name)
+        for account_id, completed in [("42", False), ("42", False), ("42", True), ("142", False), (None, False)]:
+            task_id = str(uuid.uuid4())
+            labels = {TASK_OBSERVED_ACCOUNT_ID_LABEL: account_id} if account_id else {}
+            lifecycle.record_queued(task_id, "archivex.sync_account", "queue-42", [], {}, labels)
+            if completed:
+                lifecycle.record_finished(task_id, labels, result={}, error=None,
+                    name="archivex.sync_account", worker="queue-42")
+
+        headers = {"Authorization": "Bearer test-token"}
+        scope = {"observed_account_x_user_id": "42"}
+        page = client.get("/api/task-center/tasks", params={**scope, "q": "queue-42", "limit": 1, "offset": 1}, headers=headers)
+        assert page.status_code == 200
+        assert page.json()["total"] == 3
+        assert len(page.json()["items"]) == 1
+        assert page.json()["items"][0]["observed_account_x_user_id"] == "42"
+        assert page.json()["counts"]["all"] == 3
+        assert page.json()["counts"]["queued"] == 2
+        completed = client.get("/api/task-center/tasks", params={**scope, "status": "completed"}, headers=headers).json()
+        assert completed["total"] == 1
+        assert completed["counts"]["queued"] == 2
+        summary = client.get("/api/task-center/summary", params=scope, headers=headers).json()
+        assert summary["counts"] == completed["counts"]
+        assert client.get("/api/task-center/tasks", headers=headers).json()["total"] == 5
+        assert client.get("/api/task-center/summary", headers=headers).json()["counts"]["all"] == 5
+        empty = client.get("/api/task-center/tasks", params={"observed_account_x_user_id": "999"}, headers=headers).json()
+        assert empty["items"] == []
+        assert empty["counts"]["all"] == 0
+
+
+def test_account_task_filter_scopes_current_failures(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    with TestClient(create_app(settings, FakeSource(), FakeSessionAccountManager(), FakeTaskDispatcher())) as client:
+        repository = ArchiveRepository(settings.archive_db_path, settings.archive_data_dir)
+        repository.upsert_account("42", "example")
+        repository.upsert_account("142", "other42")
+        lifecycle = TaskCenterRepository(settings.archive_db_path,
+            settings.archive_sync_interval_seconds, settings.task_crawl_queue_name)
+        for account_id in ["42", "142"]:
+            labels = {TASK_OBSERVED_ACCOUNT_ID_LABEL: account_id}
+            lifecycle.record_finished(str(uuid.uuid4()), labels, result=None, error="network unavailable",
+                name="archivex.sync_account", worker="queue-42", args=[account_id])
+        headers = {"Authorization": "Bearer test-token"}
+        parameters = {"observed_account_x_user_id": "42", "status": "failure"}
+        failures = client.get("/api/task-center/tasks", params=parameters, headers=headers).json()
+        assert failures["total"] == 1
+        assert failures["items"][0]["observed_account_x_user_id"] == "42"
+        assert failures["counts"]["failure"] == 1
+        assert client.get("/api/task-center/summary", params={"observed_account_x_user_id": "42"}, headers=headers).json()["counts"]["failure"] == 1
+        empty = client.get("/api/task-center/tasks", params={**parameters, "q": "missing"}, headers=headers).json()
+        assert empty["total"] == 0
+        assert empty["counts"]["failure"] == 1
+        second_page = client.get("/api/task-center/tasks", params={**parameters, "offset": 1}, headers=headers).json()
+        assert second_page["total"] == 1
+        assert second_page["items"] == []
+        assert client.get("/api/task-center/tasks", params={"status": "failure"}, headers=headers).json()["total"] == 2
+
+
 def test_integrated_task_center_lists_and_reruns_tasks(tmp_path) -> None:
     settings = _settings(tmp_path)
     task_id = str(uuid.uuid4())

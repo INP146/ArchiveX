@@ -496,11 +496,15 @@ class TaskCenterRepository:
         *,
         query: str | None = None,
         status: str | None = None,
+        observed_account_x_user_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
         filters: list[str] = []
         parameters: list[Any] = []
+        if observed_account_x_user_id is not None:
+            filters.append("observed_account_x_user_id = ?")
+            parameters.append(observed_account_x_user_id)
         if query:
             filters.append(
                 "(name LIKE ? OR id LIKE ? OR worker LIKE ? "
@@ -549,7 +553,10 @@ class TaskCenterRepository:
                     f"SELECT COUNT(*) FROM queue_tasks{where}", parameters
                 ).fetchone()[0])
                 count_rows = connection.execute(
-                    "SELECT status, COUNT(*) AS count FROM queue_tasks GROUP BY status"
+                    "SELECT status, COUNT(*) AS count FROM queue_tasks"
+                    + (" WHERE observed_account_x_user_id = ?" if observed_account_x_user_id is not None else "")
+                    + " GROUP BY status",
+                    (observed_account_x_user_id,) if observed_account_x_user_id is not None else (),
                 ).fetchall()
         except sqlite3.OperationalError:
             return {"items": [], "total": 0, "counts": self._empty_counts()}
@@ -566,11 +573,14 @@ class TaskCenterRepository:
             "counts": counts,
         }
 
-    def get_summary(self) -> dict[str, Any]:
+    def get_summary(self, observed_account_x_user_id: str | None = None) -> dict[str, Any]:
         try:
             with self._read() as connection:
                 count_rows = connection.execute(
-                    "SELECT status, COUNT(*) AS count FROM queue_tasks GROUP BY status"
+                    "SELECT status, COUNT(*) AS count FROM queue_tasks"
+                    + (" WHERE observed_account_x_user_id = ?" if observed_account_x_user_id is not None else "")
+                    + " GROUP BY status",
+                    (observed_account_x_user_id,) if observed_account_x_user_id is not None else (),
                 ).fetchall()
         except sqlite3.OperationalError:
             return {

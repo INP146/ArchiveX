@@ -1,15 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "@tanstack/react-router";
+import { Link, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { BsPatchCheckFill } from "react-icons/bs";
 import {
   FiArrowLeft,
   FiCalendar,
+  FiExternalLink,
   FiMapPin,
   FiPause,
   FiPlay,
   FiRefreshCw,
   FiSearch,
+  FiServer,
   FiUser
 } from "react-icons/fi";
 
@@ -30,13 +32,10 @@ import "./account-page.css";
 export function AccountPage() {
   const { xUserId } = useParams({ from: "/accounts/$xUserId" });
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<AccountTimelineTab>(() => tabFromHash());
+  const navigate = useNavigate();
+  const hash = useRouterState({ select: (state) => state.location.hash.replace(/^#/, "") });
+  const activeTab: AccountTimelineTab = hash === "media" || hash === "replies" ? hash : "posts";
   const [failedBannerUrl, setFailedBannerUrl] = useState<string | null>(null);
-  useEffect(() => {
-    const syncTabFromHash = () => setActiveTab(tabFromHash());
-    window.addEventListener("hashchange", syncTabFromHash);
-    return () => window.removeEventListener("hashchange", syncTabFromHash);
-  }, []);
   const account = useQuery({
     queryKey: ["account", xUserId],
     queryFn: () => getAccount(xUserId)
@@ -86,9 +85,7 @@ export function AccountPage() {
   });
 
   function selectTab(tab: AccountTimelineTab) {
-    setActiveTab(tab);
-    const nextHash = tab === "posts" ? "" : `#${tab}`;
-    if (window.location.hash !== nextHash) window.location.hash = nextHash;
+    void navigate({ to: "/accounts/$xUserId", params: { xUserId }, hash: tab === "posts" ? "" : tab });
   }
 
   if (account.isPending) return <PageState message="正在读取账号归档..." />;
@@ -186,6 +183,11 @@ export function AccountPage() {
               ))}
             </div>
           )}
+          <nav className="x-profile-links" aria-label="账号相关页面">
+            <Link to="/search" search={{ account: xUserId }}><FiSearch />搜索该账号</Link>
+            <Link to="/tasks" search={{ account: xUserId }}><FiServer />查看账号任务</Link>
+            <a href={username ? `https://x.com/${encodeURIComponent(username)}` : `https://x.com/i/user/${xUserId}`} target="_blank" rel="noreferrer"><FiExternalLink />打开 X 主页</a>
+          </nav>
           {(sync.error || fullScan.error || toggleArchive.error) && (
             <p className="x-profile-action-error">
               {(sync.error ?? fullScan.error ?? toggleArchive.error)?.message}
@@ -231,13 +233,14 @@ export function AccountPage() {
             <summary>查看明细（前 {postFetches.data.items.length} 条）</summary>
             <ul>{postFetches.data.items.map((item) => (
               <li key={item.tweet_id}>
-                <a href={`https://x.com/i/status/${item.tweet_id}`} target="_blank" rel="noreferrer">{item.tweet_id}</a>
+                <Link to="/posts/$tweetId" params={{ tweetId: item.tweet_id }}>{item.tweet_id}</Link>
+                {" · "}<a href={`https://x.com/i/status/${item.tweet_id}`} target="_blank" rel="noreferrer">打开 X 原帖</a>
                 {" · "}{item.status === "unavailable" ? "不可访问" : item.retry_exhausted ? "重试已停止" : "待补"}{" · "}已尝试 {item.attempt_count} 次
                 {item.last_error && <span>{item.last_error}</span>}
               </li>
             ))}</ul>
           </details>
-          <Link to="/tasks">查看补档任务</Link>
+          <Link to="/tasks" search={{ account: xUserId, q: "archivex.fetch_post_detail" }}>查看补档任务</Link>
         </details>
       )}
       <nav className="x-tabs" aria-label="账号内容">
@@ -282,10 +285,4 @@ function formatJoined(value: string) {
     year: "numeric",
     month: "long"
   }).format(new Date(value));
-}
-
-function tabFromHash(): AccountTimelineTab {
-  if (window.location.hash === "#media") return "media";
-  if (window.location.hash === "#replies") return "replies";
-  return "posts";
 }

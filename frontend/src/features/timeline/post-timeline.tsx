@@ -7,7 +7,7 @@ import {
   FiBookmark,
   FiHeart,
   FiMessageCircle,
-  FiMoreHorizontal,
+  FiExternalLink,
   FiRepeat,
   FiUpload,
   FiUser
@@ -15,6 +15,7 @@ import {
 import { HiOutlineTranslate } from "react-icons/hi";
 import { TbSparkles } from "react-icons/tb";
 
+import { ArchiveAuthorLink } from "../../components/archive-author-link";
 import { ApiError } from "../../lib/api/client";
 import {
   AccountTimelineTab,
@@ -124,24 +125,25 @@ function PostItem({ post: item }: { post: TimelineItem }) {
       {item.item_type === "repost" && (
         <div className="x-post-repost">
           <FiRepeat aria-hidden="true" />
-          <a href={item.permalink} target="_blank" rel="noreferrer">
-            {item.reposter.display_name ?? item.reposter.username ?? item.reposter.x_user_id} 已转帖
-            <time dateTime={item.reposted_at}> · {formatPostDate(item.reposted_at)}</time>
-          </a>
+          <span>
+            <ArchiveAuthorLink author={item.reposter}>{item.reposter.display_name ?? item.reposter.username ?? item.reposter.x_user_id}</ArchiveAuthorLink> 已转帖
+            <Link to="/posts/$tweetId" params={{ tweetId: item.tweet_id }} aria-label="查看转帖归档"><time dateTime={item.reposted_at}> · {formatPostDate(item.reposted_at)}</time></Link>
+            {" · "}<a href={item.permalink} target="_blank" rel="noreferrer">打开 X 转帖</a>
+          </span>
         </div>
       )}
       <div className="x-post-main">
-        <div className="x-avatar x-avatar-post">
+        <ArchiveAuthorLink author={post.author} className="x-avatar x-avatar-post" label={`${authorName} 的主页`}>
           {avatarUrl ? <img src={avatarUrl} alt="" /> : <FiUser aria-hidden="true" />}
-        </div>
+        </ArchiveAuthorLink>
         <div className="x-post-body">
           <div className="x-post-heading">
             <div className="x-post-author">
-              <strong>{authorName}</strong>
+              <ArchiveAuthorLink author={post.author}><strong>{authorName}</strong></ArchiveAuthorLink>
               {post.author_verified && <BsPatchCheckFill className="x-verified" aria-label="已认证" />}
-              {authorUsername && <span className="x-post-handle">@{authorUsername}</span>}
+              {authorUsername && <ArchiveAuthorLink author={post.author} className="x-post-handle">@{authorUsername}</ArchiveAuthorLink>}
               <span>·</span>
-              <time dateTime={post.posted_at}>{formatPostDate(post.posted_at)}</time>
+              <Link to="/posts/$tweetId" params={{ tweetId: post.tweet_id }} aria-label="查看帖子归档"><time dateTime={post.posted_at}>{formatPostDate(post.posted_at)}</time></Link>
             </div>
             <div className="x-post-tools">
               {post.is_translatable && translationLanguage && (
@@ -149,8 +151,8 @@ function PostItem({ post: item }: { post: TimelineItem }) {
                   <HiOutlineTranslate />
                 </a>
               )}
-              <a href={post.permalink} target="_blank" rel="noreferrer" aria-label="打开原帖菜单" title="更多">
-                <FiMoreHorizontal />
+              <a href={post.permalink} target="_blank" rel="noreferrer" aria-label="打开 X 原帖" title="打开 X 原帖">
+                <FiExternalLink />
               </a>
             </div>
           </div>
@@ -158,10 +160,10 @@ function PostItem({ post: item }: { post: TimelineItem }) {
             <div className="x-post-context">
               <span>回复</span>
               {post.reply_to_username && (
-                <a href={`https://x.com/${post.reply_to_username}`} target="_blank" rel="noreferrer">
-                  @{post.reply_to_username}
-                </a>
+                post.reference ? <ArchiveAuthorLink author={{ x_user_id: post.reference.author.x_user_id, username: post.reply_to_username }}>@{post.reply_to_username}</ArchiveAuthorLink> :
+                  <a href={`https://x.com/${encodeURIComponent(post.reply_to_username)}`} target="_blank" rel="noreferrer">@{post.reply_to_username}</a>
               )}
+              {post.reference && <Link to="/posts/$tweetId" params={{ tweetId: post.reference.tweet_id }}>查看上文</Link>}
             </div>
           )}
           {post.is_translatable && translationLanguage && (
@@ -179,7 +181,7 @@ function PostItem({ post: item }: { post: TimelineItem }) {
             <div className="x-post-ai-label"><TbSparkles aria-hidden="true" />由 AI 生成</div>
           )}
           <div className="x-post-actions" aria-label="帖子数据">
-            <PostMetric icon={<FiMessageCircle />} value={post.reply_count} label="回复" />
+            <Link className="x-post-metric" to="/posts/$tweetId" params={{ tweetId: post.tweet_id }} aria-label="查看帖子归档"><FiMessageCircle />{post.reply_count !== null && <span>{formatCount(post.reply_count)}</span>}</Link>
             <PostMetric icon={<FiRepeat />} value={post.repost_count} label="转帖" />
             <PostMetric icon={<FiHeart />} value={post.like_count} label="喜欢" />
             <PostMetric icon={<FiBarChart2 />} value={post.view_count} label="查看" />
@@ -198,13 +200,14 @@ function ReferenceCard({ reference, label = "引用" }: { reference: PostContent
     <aside className="x-post-reference">
       <div className="x-post-reference-heading">
         <span>{label}</span>
-        <span>{author}</span>
+        <ArchiveAuthorLink author={reference.author}>{author}</ArchiveAuthorLink>
       </div>
       {reference.display_text && <p className="x-post-text">{reference.display_text}</p>}
       {reference.availability === "unknown" && <p>尚未获取引用内容</p>}
       {reference.media.length > 0 && <MediaGrid media={reference.media} />}
       {reference.post_type === "quote" && reference.reference && <ReferenceCard reference={reference.reference} />}
-      <a href={reference.permalink} target="_blank" rel="noreferrer">打开原帖</a>
+      <Link to="/posts/$tweetId" params={{ tweetId: reference.tweet_id }}>查看归档</Link>
+      {" · "}<a href={reference.permalink} target="_blank" rel="noreferrer">打开 X 原帖</a>
     </aside>
   );
 }

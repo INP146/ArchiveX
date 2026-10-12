@@ -122,10 +122,11 @@ export interface FailureRetryResult {
   failed: number;
 }
 
-export function getTasks(query: string, status: TaskStatus | null, offset = 0, limit = 50) {
+export function getTasks(query: string, status: TaskStatus | null, offset = 0, limit = 50, accountId?: string) {
   const parameters = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (query.trim()) parameters.set("q", query.trim());
   if (status) parameters.set("status", status);
+  if (accountId) parameters.set("observed_account_x_user_id", accountId);
   return apiFetch<TaskListResponse>(`/api/task-center/tasks?${parameters}`);
 }
 
@@ -133,8 +134,10 @@ export function getTask(taskId: string) {
   return apiFetch<TaskRecord>(`/api/task-center/tasks/${taskId}`);
 }
 
-export function getTaskSummary() {
-  return apiFetch<TaskSummary>("/api/task-center/summary");
+export function getTaskSummary(accountId?: string) {
+  const parameters = new URLSearchParams();
+  if (accountId) parameters.set("observed_account_x_user_id", accountId);
+  return apiFetch<TaskSummary>(`/api/task-center/summary?${parameters}`);
 }
 
 export function rerunTask(taskId: string) {

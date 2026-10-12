@@ -324,6 +324,7 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
     def list_tasks(
         q: str | None = Query(default=None, max_length=200),
         task_status: str | None = Query(default=None, alias="status"),
+        observed_account_x_user_id: str | None = None,
         limit: int = Query(default=50, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
@@ -331,17 +332,21 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
             raise HTTPException(status_code=422, detail="invalid task status")
         query = q.strip() if q and q.strip() else None
         current_failures = _current_task_failures(task_center, repository)
+        if observed_account_x_user_id is not None:
+            current_failures = [task for task in current_failures
+                if task.get("observed_account_x_user_id") == observed_account_x_user_id]
         if task_status == "failure":
             matching_failures = [
                 task for task in current_failures if _task_matches_query(task, query)
             ]
-            response = task_center.list_tasks(limit=1)
+            response = task_center.list_tasks(limit=1, observed_account_x_user_id=observed_account_x_user_id)
             response["items"] = matching_failures[offset:offset + limit]
             response["total"] = len(matching_failures)
         else:
             response = task_center.list_tasks(
                 query=query,
                 status=task_status,
+                observed_account_x_user_id=observed_account_x_user_id,
                 limit=limit,
                 offset=offset,
             )
@@ -349,10 +354,12 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
         return response
 
     @router.get("/task-center/summary")
-    def get_task_summary() -> dict[str, Any]:
-        response = task_center.get_summary()
+    def get_task_summary(observed_account_x_user_id: str | None = None) -> dict[str, Any]:
+        response = task_center.get_summary(observed_account_x_user_id)
         response["counts"]["failure"] = len(
-            _current_task_failures(task_center, repository)
+            [task for task in _current_task_failures(task_center, repository)
+             if observed_account_x_user_id is None
+             or task.get("observed_account_x_user_id") == observed_account_x_user_id]
         )
         return response
 

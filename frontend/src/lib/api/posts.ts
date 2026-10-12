@@ -66,8 +66,13 @@ export function getTimelinePosts(
   const query = new URLSearchParams({ limit: String(POSTS_PAGE_SIZE), offset: String(offset) });
   if (xUserId !== undefined) query.set("observed_account_x_user_id", xUserId);
   if (searchQuery) query.set("q", searchQuery);
+  if (searchQuery) query.set("search_origin", "true");
   if (tab === "posts" && !includeReplies) query.set("exclude_post_type", "reply");
   if (tab === "replies") query.set("post_type", "reply");
   if (tab === "media") query.set("has_media", "true");
   return apiFetch<TimelineItem[]>(`/api/posts?${query}`);
+}
+
+export function getPost(tweetId: string) {
+  return apiFetch<TimelineItem>(`/api/posts/${encodeURIComponent(tweetId)}`);
 }
