@@ -1,7 +1,7 @@
 {
   "name": "archivex-web",
   "private": true,
-  "version": "0.1.2-rc3",
+  "version": "0.1.2-rc4",
   "type": "module",
   "scripts": {
     "dev": "vite",
