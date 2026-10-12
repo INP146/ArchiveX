@@ -84,6 +84,9 @@ rc3，此次引入自动化本身不代表发布 rc4。
 `validate.yml` 在 PR、main 推送时运行，也由 tag 发布流程调用。校验包括版本一致性、
 锁定的 Python 运行时依赖安装、依赖冲突检查、完整后端测试、前端 TypeScript 和生产
 构建，以及构建版/GHCR 版 Compose（含 tools profile）的配置校验。
+后端测试前，CI 在 runner 工作区创建仅含 `WEB_AUTH_TOKEN=ci-test-token` 的测试 `.env`，
+供测试收集阶段导入任务模块时加载必要配置；本地已有 `.env` 不参与 CI，也不会
+被此步骤修改。令牌保持在配置文件中，使 `_env_file=None` 的必填校验测试仍能验证缺失值。
 tag 发布额外要求 tag 对应源码版本、发布说明存在且不再包含草稿占位符。
 
 `publish-container-images.yml` 的 Publish release 流程：

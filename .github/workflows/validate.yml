@@ -49,7 +49,10 @@ jobs:
           python -m pip check
 
       - name: Run backend tests
-        run: python -m pytest
+        run: |
+          # Task modules load Settings during test collection.
+          printf 'WEB_AUTH_TOKEN=ci-test-token\n' > .env
+          python -m pytest
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
