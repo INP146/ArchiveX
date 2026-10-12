@@ -1,0 +1,125 @@
+{
+  "database": "/Users/user/Projects/ArchiveX/data/archive.sqlite3",
+  "backup": "/Users/user/Projects/ArchiveX/backups/pre-unavailable-post-state-20261012T114257Z.sqlite3",
+  "updated_ids": [
+    "2104803149496369247",
+    "2086518108714668427",
+    "2086004209955254578",
+    "2086262009428132198",
+    "2084231265134297210"
+  ],
+  "counts": {
+    "pending": 0,
+    "unavailable": 5,
+    "failed": 0
+  },
+  "before": [
+    {
+      "observed_account_x_user_id": "1960693507158630410",
+      "tweet_id": "2084231265134297210",
+      "status": "pending",
+      "attempt_count": 11,
+      "last_error": "Could not read conversation tweet 2084231265134297210 from TweetDetail",
+      "first_seen_at": "2026-10-12T11:22:34.368102+00:00",
+      "last_seen_at": "2026-10-12T11:33:56.027184+00:00",
+      "last_attempt_at": "2026-10-12T11:33:56.030628+00:00"
+    },
+    {
+      "observed_account_x_user_id": "1960693507158630410",
+      "tweet_id": "2086004209955254578",
+      "status": "pending",
+      "attempt_count": 11,
+      "last_error": "Could not read conversation tweet 2086004209955254578 from TweetDetail",
+      "first_seen_at": "2026-10-12T11:22:30.889518+00:00",
+      "last_seen_at": "2026-10-12T11:33:56.649979+00:00",
+      "last_attempt_at": "2026-10-12T11:33:56.655902+00:00"
+    },
+    {
+      "observed_account_x_user_id": "1960693507158630410",
+      "tweet_id": "2086262009428132198",
+      "status": "pending",
+      "attempt_count": 11,
+      "last_error": "Could not read conversation tweet 2086262009428132198 from TweetDetail",
+      "first_seen_at": "2026-10-12T11:22:30.892433+00:00",
+      "last_seen_at": "2026-10-12T11:33:57.295901+00:00",
+      "last_attempt_at": "2026-10-12T11:33:57.297867+00:00"
+    },
+    {
+      "observed_account_x_user_id": "1960693507158630410",
+      "tweet_id": "2086518108714668427",
+      "status": "pending",
+      "attempt_count": 11,
+      "last_error": "Could not read conversation tweet 2086518108714668427 from TweetDetail",
+      "first_seen_at": "2026-10-12T11:22:30.887359+00:00",
+      "last_seen_at": "2026-10-12T11:33:54.025809+00:00",
+      "last_attempt_at": "2026-10-12T11:33:54.033271+00:00"
+    },
+    {
+      "observed_account_x_user_id": "1960693507158630410",
+      "tweet_id": "2104803149496369247",
+      "status": "pending",
+      "attempt_count": 11,
+      "last_error": "Could not read conversation tweet 2104803149496369247 from TweetDetail",
+      "first_seen_at": "2026-10-12T11:22:28.138684+00:00",
+      "last_seen_at": "2026-10-12T11:33:55.020377+00:00",
+      "last_attempt_at": "2026-10-12T11:33:55.024371+00:00"
+    }
+  ],
+  "after": [
+    {
+      "observed_account_x_user_id": "1960693507158630410",
+      "tweet_id": "2104803149496369247",
+      "status": "unavailable",
+      "attempt_count": 11,
+      "last_error": "X returned an empty focal tweet in a completed conversation; confirmed inaccessible on 2026-10-12",
+      "first_seen_at": "2026-10-12T11:22:28.138684+00:00",
+      "last_seen_at": "2026-10-12T11:33:55.020377+00:00",
+      "last_attempt_at": "2026-10-12T11:33:55.024371+00:00",
+      "retry_exhausted": 0
+    },
+    {
+      "observed_account_x_user_id": "1960693507158630410",
+      "tweet_id": "2086518108714668427",
+      "status": "unavailable",
+      "attempt_count": 11,
+      "last_error": "X returned an empty focal tweet in a completed conversation; confirmed inaccessible on 2026-10-12",
+      "first_seen_at": "2026-10-12T11:22:30.887359+00:00",
+      "last_seen_at": "2026-10-12T11:33:54.025809+00:00",
+      "last_attempt_at": "2026-10-12T11:33:54.033271+00:00",
+      "retry_exhausted": 0
+    },
+    {
+      "observed_account_x_user_id": "1960693507158630410",
+      "tweet_id": "2086004209955254578",
+      "status": "unavailable",
+      "attempt_count": 11,
+      "last_error": "X returned an empty focal tweet in a completed conversation; confirmed inaccessible on 2026-10-12",
+      "first_seen_at": "2026-10-12T11:22:30.889518+00:00",
+      "last_seen_at": "2026-10-12T11:33:56.649979+00:00",
+      "last_attempt_at": "2026-10-12T11:33:56.655902+00:00",
+      "retry_exhausted": 0
+    },
+    {
+      "observed_account_x_user_id": "1960693507158630410",
+      "tweet_id": "2086262009428132198",
+      "status": "unavailable",
+      "attempt_count": 11,
+      "last_error": "X returned an empty focal tweet in a completed conversation; confirmed inaccessible on 2026-10-12",
+      "first_seen_at": "2026-10-12T11:22:30.892433+00:00",
+      "last_seen_at": "2026-10-12T11:33:57.295901+00:00",
+      "last_attempt_at": "2026-10-12T11:33:57.297867+00:00",
+      "retry_exhausted": 0
+    },
+    {
+      "observed_account_x_user_id": "1960693507158630410",
+      "tweet_id": "2084231265134297210",
+      "status": "unavailable",
+      "attempt_count": 11,
+      "last_error": "X returned an empty focal tweet in a completed conversation; confirmed inaccessible on 2026-10-12",
+      "first_seen_at": "2026-10-12T11:22:34.368102+00:00",
+      "last_seen_at": "2026-10-12T11:33:56.027184+00:00",
+      "last_attempt_at": "2026-10-12T11:33:56.030628+00:00",
+      "retry_exhausted": 0
+    }
+  ]
+}

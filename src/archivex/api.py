@@ -237,6 +237,30 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
             raise HTTPException(status_code=404, detail="account not found")
         return repository.username_history(x_user_id)
 
+    @router.get("/accounts/{x_user_id}/post-fetches")
+    def list_post_fetches(x_user_id: str, limit: int = Query(default=50, ge=1, le=100)) -> dict[str, Any]:
+        _validate_x_user_id(x_user_id)
+        if repository.get_account(x_user_id) is None:
+            raise HTTPException(status_code=404, detail="account not found")
+        return {**repository.post_fetch_counts(x_user_id),
+                "items": repository.post_fetches(x_user_id, include_unavailable=True, limit=limit)}
+
+    @router.post("/accounts/{x_user_id}/post-fetches/retry", status_code=status.HTTP_202_ACCEPTED)
+    async def retry_post_fetches(x_user_id: str) -> dict[str, int]:
+        _validate_x_user_id(x_user_id)
+        if repository.get_account(x_user_id) is None:
+            raise HTTPException(status_code=404, detail="account not found")
+        result = {"queued": 0, "duplicates": 0, "failed": 0}
+        for item in repository.post_fetches(x_user_id, include_unavailable=True):
+            repository.reset_post_fetch(x_user_id, item["tweet_id"])
+            try:
+                submission = await task_dispatcher.enqueue_post_fetch(x_user_id, item["tweet_id"])
+                result["duplicates" if submission.duplicate else "queued"] += 1
+            except Exception:
+                result["failed"] += 1
+                logger.exception("Could not submit recovery for tweet %s", item["tweet_id"])
+        return result
+
     @router.get("/posts")
     def list_posts(
         account_x_user_id: str | None = None,
@@ -368,6 +392,14 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
                 **({"full_scan": True} if _task_full_scan(task) else {}),
             )
             return submission.as_dict()
+        if task["name"] == "archivex.fetch_post_detail" and account_id:
+            tweet_id = _task_context_id(task, "post", "tweet_id")
+            if tweet_id and repository.get_account(account_id) is not None:
+                repository.register_post_fetch(account_id, tweet_id)
+                repository.reset_post_fetch(account_id, tweet_id)
+                submission = await task_dispatcher.enqueue_post_fetch(account_id, tweet_id,
+                    task["id"], task.get("parent_task_id"))
+                return submission.as_dict()
         if task["name"] == "archivex.download_media" and media_id:
             submission = await task_dispatcher.enqueue_media_download(
                 media_id,
@@ -442,6 +474,18 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
                     result["duplicates" if submission.duplicate else "queued"] += 1
                     continue
 
+                if task["name"] == "archivex.fetch_post_detail" and account_id:
+                    tweet_id = _task_context_id(task, "post", "tweet_id")
+                    pending = repository.post_fetch(account_id, tweet_id) if tweet_id else None
+                    if pending is None or pending["status"] != "pending":
+                        result["skipped_resolved"] += 1
+                        continue
+                    repository.reset_post_fetch(account_id, tweet_id)
+                    submission = await task_dispatcher.enqueue_post_fetch(account_id, tweet_id,
+                        task["id"], task.get("parent_task_id"))
+                    result["duplicates" if submission.duplicate else "queued"] += 1
+                    continue
+
                 if task["name"] == "archivex.schedule_enabled_accounts":
                     enabled_account_ids = repository.list_enabled_account_ids()
                     if not enabled_account_ids:
@@ -502,6 +546,11 @@ def _current_task_failures(
             media = repository.get_media_record(media_id)
             if media is None or media.download_status not in {"pending", "failed"}:
                 continue
+        elif task["name"] == "archivex.fetch_post_detail" and account_id:
+            tweet_id = _task_context_id(task, "post", "tweet_id")
+            pending = repository.post_fetch(account_id, tweet_id) if tweet_id else None
+            if pending is None or pending["status"] != "pending":
+                continue
         elif task["name"] == "archivex.schedule_enabled_accounts":
             if enabled_account_ids is None:
                 enabled_account_ids = repository.list_enabled_account_ids()
@@ -512,8 +561,8 @@ def _current_task_failures(
 
 
 def _task_context_id(task: dict[str, Any], subject: str, field: str) -> str | None:
-    direct_field = "observed_account_x_user_id" if subject == "account" else "media_id"
-    direct_value = task.get(direct_field)
+    direct_field = {"account": "observed_account_x_user_id", "media": "media_id"}.get(subject)
+    direct_value = task.get(direct_field) if direct_field else None
     if direct_value:
         return str(direct_value)
     context = task.get("context")

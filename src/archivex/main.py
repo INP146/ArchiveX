@@ -38,6 +38,7 @@ def create_app(settings: Settings | None = None, post_source: PostSource | None 
         app_settings.twscrape_session_path,
         wait_timeout=app_settings.twscrape_wait_timeout_seconds,
         wait_interval=app_settings.twscrape_wait_interval_seconds,
+        repository=repository,
     )
     session_accounts = (
         session_account_manager

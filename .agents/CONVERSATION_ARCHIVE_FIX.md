@@ -1,5 +1,9 @@
 # 折叠帖子串漏归档修复
 
+本文记录最初修复。后续缓存复用、单条失败持久恢复及视频解析修复见
+[POST_RECOVERY_IMPLEMENTATION.md](POST_RECOVERY_IMPLEMENTATION.md)；
+手动完整扫描入口见 [FULL_SCAN_UI.md](FULL_SCAN_UI.md)。
+
 ## 现场证据（2026-10-12）
 
 目标账号：`uyu1289742`，稳定用户 ID：`1960693507158630410`。

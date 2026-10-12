@@ -60,6 +60,16 @@
 .x-full-scan-button:hover { background: rgba(239, 243, 244, .1); }
 .x-full-scan-button svg { width: 16px; height: 16px; }
 .x-full-scan-status { margin: 0; padding: 0 16px 16px; }
+.x-post-recovery { padding: 16px; border-top: 1px solid var(--x-border); color: var(--x-muted); font-size: 13px; line-height: 20px; }
+.x-post-recovery strong { color: var(--x-text); }
+.x-post-recovery > summary { color: var(--x-text); font-weight: 600; }
+.x-post-recovery p { margin: 8px 0; }
+.x-post-recovery details { margin: 12px 0; }
+.x-post-recovery summary { cursor: pointer; }
+.x-post-recovery ul { padding-left: 18px; }
+.x-post-recovery li { margin: 8px 0; overflow-wrap: anywhere; }
+.x-post-recovery li span { display: block; }
+.x-post-recovery a { color: var(--x-accent); }
 .x-archive-toggle { display: inline-flex; height: 36px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border: 1px solid #536471; border-radius: 999px; background: transparent; color: #eff3f4; font-size: 14px; font-weight: 700; text-align: center; }
 .x-archive-toggle:hover { background: rgba(239, 243, 244, .1); }
 .x-archive-toggle svg { width: 16px; height: 16px; }

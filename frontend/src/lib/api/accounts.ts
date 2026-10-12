@@ -102,3 +102,20 @@ export function fullScanAccounts() {
 export function getUsernameHistory(xUserId: string) {
   return apiFetch<UsernameHistoryItem[]>(`/api/accounts/${xUserId}/username-history`);
 }
+
+export interface PostFetchSummary {
+  pending: number;
+  unavailable: number;
+  failed: number;
+  items: { tweet_id: string; status: "pending" | "unavailable"; retry_exhausted: number; last_error: string | null; attempt_count: number }[];
+}
+
+export function getPostFetches(xUserId: string) {
+  return apiFetch<PostFetchSummary>(`/api/accounts/${xUserId}/post-fetches`);
+}
+
+export function retryPostFetches(xUserId: string) {
+  return apiFetch<{ queued: number; duplicates: number; failed: number }>(
+    `/api/accounts/${xUserId}/post-fetches/retry`, { method: "POST" }
+  );
+}

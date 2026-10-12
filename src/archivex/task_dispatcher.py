@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, dataclass
+import logging
 from typing import Protocol
 
 from archivex.sync import ArchiveSyncService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -18,6 +21,10 @@ class TaskSubmission:
 
 
 class SyncTaskDispatcher(Protocol):
+    async def enqueue_post_fetch(self, x_user_id: str, tweet_id: str,
+                                 retry_of: str | None = None,
+                                 parent_task_id: str | None = None) -> TaskSubmission: ...
+
     async def enqueue_account_sync(
         self,
         x_user_id: str,
@@ -41,6 +48,12 @@ class InlineSyncTaskDispatcher:
     def __init__(self, service: ArchiveSyncService) -> None:
         self.service = service
 
+    async def enqueue_post_fetch(self, x_user_id: str, tweet_id: str,
+                                 retry_of: str | None = None,
+                                 parent_task_id: str | None = None) -> TaskSubmission:
+        result = await self.service.recover_post(x_user_id, tweet_id)
+        return TaskSubmission(f"inline:post:{x_user_id}:{tweet_id}", result["status"], False)
+
     async def enqueue_account_sync(
         self,
         x_user_id: str,
@@ -50,6 +63,12 @@ class InlineSyncTaskDispatcher:
         full_scan: bool = False,
     ) -> TaskSubmission:
         result = await self.service.sync_account(x_user_id, full_scan=full_scan)
+        if result.status in {"success", "partial"}:
+            for item in self.service.repository.post_fetches(x_user_id):
+                try:
+                    await self.enqueue_post_fetch(x_user_id, item["tweet_id"])
+                except Exception:
+                    logger.warning("Post %s remains pending recovery", item["tweet_id"])
         return TaskSubmission(
             task_id=f"inline:{x_user_id}",
             state=result.status,
@@ -87,6 +106,12 @@ class InlineSyncTaskDispatcher:
 
 
 class TaskiqSyncTaskDispatcher:
+    async def enqueue_post_fetch(self, x_user_id: str, tweet_id: str,
+                                 retry_of: str | None = None,
+                                 parent_task_id: str | None = None) -> TaskSubmission:
+        from archivex.tasks import enqueue_post_fetch
+        return await enqueue_post_fetch(x_user_id, tweet_id, retry_of, parent_task_id)
+
     async def enqueue_account_sync(
         self,
         x_user_id: str,

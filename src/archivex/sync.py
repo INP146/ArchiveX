@@ -12,6 +12,8 @@ from archivex.source import (
     AccountPoolUnavailableError,
     PostSource,
     TwscrapeResponseError,
+    PostUnavailableError,
+    TwscrapePostSource,
 )
 from archivex.storage import ArchiveRepository
 
@@ -29,6 +31,9 @@ class AccountSyncResult:
     referenced_new: int = 0
     reposts_new: int = 0
     error: str | None = None
+    posts_pending: int = 0
+    posts_unavailable: int = 0
+    posts_failed: int = 0
 
 
 class ArchiveSyncService:
@@ -47,6 +52,8 @@ class ArchiveSyncService:
     ) -> None:
         self.repository = repository
         self.source = source
+        if isinstance(source, TwscrapePostSource):
+            source.repository = repository
         self.initial_post_limit = initial_post_limit
         self.incremental_known_post_limit = incremental_known_post_limit
         self.media_downloader = media_downloader
@@ -206,6 +213,10 @@ class ArchiveSyncService:
             )
 
         completed_at = self.now()
+        gaps = self.repository.post_fetch_counts(x_user_id)
+        status = "partial" if gaps["pending"] or gaps["failed"] else "success"
+        warning = (f"{gaps['pending']} post(s) pending recovery; {gaps['failed']} retries exhausted; {gaps['unavailable']} unavailable"
+                   if status == "partial" else None)
         self.repository.finish_sync_run(
             run_id,
             posts_seen=posts_seen,
@@ -213,7 +224,8 @@ class ArchiveSyncService:
             media_new=media_new,
             referenced_new=referenced_new,
             reposts_new=reposts_new,
-            status="success",
+            status=status,
+            error=warning,
         )
         self.repository.mark_account_sync_success(x_user_id, completed_at)
         current = self.repository.get_account(x_user_id)
@@ -222,7 +234,11 @@ class ArchiveSyncService:
             username=(
                 current.current_username if current and current.current_username else username
             ),
-            status="success",
+            status=status,
+            posts_pending=gaps["pending"],
+            posts_unavailable=gaps["unavailable"],
+            posts_failed=gaps["failed"],
+            error=warning,
             posts_seen=posts_seen,
             posts_new=posts_new,
             media_new=media_new,
@@ -245,6 +261,32 @@ class ArchiveSyncService:
                 message = str(exc) or exc.__class__.__name__
                 self.repository.fail_media(media.id, message)
                 logger.warning("Media download failed for archived post %s", tweet_id)
+
+    async def recover_post(self, x_user_id: str, tweet_id: str) -> dict:
+        """Retry one durable gap independently of timeline pagination."""
+        self.repository.register_post_fetch(x_user_id, tweet_id)
+        existing = self.repository.post_fetch(x_user_id, tweet_id)
+        if existing and existing["retry_exhausted"]:
+            return {"status": "exhausted", "tweet_id": tweet_id}
+        if self.repository.cached_post_snapshot(tweet_id) is None:
+            self.repository.attempt_post_fetch(x_user_id, tweet_id)
+        try:
+            post = await self.source.fetch_post(tweet_id)
+            if post.x_user_id != x_user_id:
+                self.repository.finish_post_fetch(x_user_id, tweet_id, "ignored")
+                return {"status": "ignored", "tweet_id": tweet_id}
+            ingested = self.repository.ingest_item(post, x_user_id)
+        except PostUnavailableError as exc:
+            self.repository.finish_post_fetch(x_user_id, tweet_id, "unavailable", str(exc))
+            return {"status": "unavailable", "tweet_id": tweet_id}
+        except Exception as exc:
+            self.repository.finish_post_fetch(x_user_id, tweet_id, "pending", str(exc) or type(exc).__name__)
+            raise
+        if self.media_enabled and self.media_downloader is not None:
+            for owner in ingested.content_ids:
+                await self._download_post_media(owner)
+        return {"status": "success", "tweet_id": tweet_id,
+                "posts_new": int(ingested.observation_new), "media_new": ingested.media_new}
 
     async def _retry_failed_media(self, observed_account_x_user_id: str) -> None:
         for tweet_id in self.repository.failed_media_post_ids(observed_account_x_user_id):

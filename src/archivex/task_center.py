@@ -24,6 +24,7 @@ TASK_OBSERVED_ACCOUNT_ID_LABEL = "_archivex_observed_account_x_user_id"
 TASK_MEDIA_ID_LABEL = "_archivex_media_id"
 TASK_PARENT_ID_LABEL = "_archivex_parent_task_id"
 TASK_TRIGGER_LABEL = "_archivex_trigger"
+TASK_FETCH_TWEET_ID_LABEL = "_archivex_fetch_tweet_id"
 TASK_SCHEMA = """
 CREATE TABLE IF NOT EXISTS queue_tasks (
     id TEXT PRIMARY KEY,
@@ -806,6 +807,11 @@ class TaskCenterRepository:
         if not context and name == "archivex.schedule_enabled_accounts":
             context["schedule"] = {"id": "enabled-account-sync"}
 
+        tweet_id = _optional_text(labels.get(TASK_FETCH_TWEET_ID_LABEL))
+        if name == "archivex.fetch_post_detail" and tweet_id and tweet_id.isascii() and tweet_id.isdecimal():
+            context["post"] = {"tweet_id": tweet_id,
+                               "permalink": f"https://x.com/i/status/{tweet_id}", "text_preview": ""}
+
         return _TaskMetadata(
             observed_account_x_user_id=observed_account_x_user_id,
             media_id=media_id,
@@ -1026,6 +1032,9 @@ def _task_target_key(task: dict[str, Any]) -> tuple[str, str]:
     media = context.get("media") if isinstance(context.get("media"), dict) else {}
     account = context.get("account") if isinstance(context.get("account"), dict) else {}
     schedule = context.get("schedule") if isinstance(context.get("schedule"), dict) else {}
+    post = context.get("post") if isinstance(context.get("post"), dict) else {}
+    if task["name"] == "archivex.fetch_post_detail" and post.get("tweet_id"):
+        return task["name"], f"{account.get('x_user_id')}:{post['tweet_id']}"
     structured_target = (
         task.get("media_id")
         or task.get("observed_account_x_user_id")

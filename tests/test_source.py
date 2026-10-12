@@ -118,14 +118,14 @@ class ConversationApi(FakeApi):
         self.details = details
         self.detail_calls = []
 
-    async def tweet_details(self, tweet_id):
+    async def tweet_details_raw(self, tweet_id):
         self.detail_calls.append(str(tweet_id))
         result = self.details[str(tweet_id)]
         if isinstance(result, Exception):
             raise result
         if result is None:
             return None
-        return next(parse_tweets(_page([result]).json()))
+        return _page([result])
 
 
 def _conversation_source(api):

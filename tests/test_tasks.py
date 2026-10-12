@@ -747,6 +747,7 @@ def test_full_scan_worker_passes_mode_to_sync_service(monkeypatch):
     for name in ("_claim_execution", "_extend_execution_lock", "_release_lock"):
         monkeypatch.setattr(tasks, name, succeed)
     monkeypatch.setattr(tasks, "_enqueue_account_media", media)
+    monkeypatch.setattr(tasks, "_enqueue_account_post_fetches", media)
     context = SimpleNamespace(message=SimpleNamespace(task_id=str(uuid.uuid4())))
     result = asyncio.run(tasks.sync_account_task.original_func("42", context=context, full_scan=True))
     assert captured == [True]

@@ -35,6 +35,7 @@ from archivex.task_center import (
     TASK_MEDIA_ID_LABEL,
     TASK_PARENT_ID_LABEL,
     TASK_TRIGGER_LABEL,
+    TASK_FETCH_TWEET_ID_LABEL,
     TaskCenterRepository,
 )
 from archivex.task_dispatcher import TaskSubmission
@@ -492,6 +493,10 @@ def _media_lock_key(media_id: str) -> str:
     return f"archivex:dedupe:media:{media_id}"
 
 
+def _post_fetch_lock_key(x_user_id: str, tweet_id: str) -> str:
+    return f"archivex:dedupe:post:{x_user_id}:{tweet_id}"
+
+
 async def _reserve_lock(key: str, task_id: str) -> tuple[bool, str]:
     client = _redis()
     try:
@@ -752,6 +757,30 @@ async def enqueue_account_sync(
     return TaskSubmission(task_id, "queued", False)
 
 
+async def enqueue_post_fetch(x_user_id: str, tweet_id: str, retry_of: str | None = None,
+                             parent_task_id: str | None = None) -> TaskSubmission:
+    task_id = str(uuid.uuid4())
+    key = _post_fetch_lock_key(x_user_id, tweet_id)
+    reserved, owner = await _reserve_lock(key, task_id)
+    if not reserved:
+        return TaskSubmission(owner, "queued", True)
+    task_labels = {TASK_OBSERVED_ACCOUNT_ID_LABEL: x_user_id, TASK_FETCH_TWEET_ID_LABEL: tweet_id,
+                   TASK_TRIGGER_LABEL: "post_recovery"}
+    if parent_task_id is not None:
+        task_labels[TASK_PARENT_ID_LABEL] = parent_task_id
+    if retry_of is not None:
+        task_labels["retry_of"] = retry_of
+    kicker = fetch_post_detail_task.kicker().with_task_id(task_id).with_labels(**task_labels)
+    try:
+        await kicker.kiq(x_user_id, tweet_id)
+    except Exception as exc:
+        await _rollback_failed_publish(key, task_id, exc, name="archivex.fetch_post_detail",
+                                       worker=settings.task_crawl_queue_name, args=[x_user_id, tweet_id],
+                                       labels={**_task_labels(fetch_post_detail_task), **task_labels})
+        raise
+    return TaskSubmission(task_id, "queued", False)
+
+
 async def enqueue_media_download(
     media_id: str,
     retry_of: str | None = None,
@@ -810,6 +839,19 @@ async def _enqueue_account_media(
     return queued, duplicates
 
 
+async def _enqueue_account_post_fetches(repository: ArchiveRepository, x_user_id: str,
+                                        lock_key: str, task_id: str) -> tuple[int, int]:
+    queued = duplicates = 0
+    for pending in repository.post_fetches(x_user_id):
+        await _extend_execution_lock(lock_key, task_id)
+        submission = await enqueue_post_fetch(x_user_id, pending["tweet_id"], parent_task_id=task_id)
+        if submission.duplicate:
+            duplicates += 1
+        else:
+            queued += 1
+    return queued, duplicates
+
+
 @broker.task(
     task_name="archivex.sync_account",
     queue_name=settings.task_crawl_queue_name,
@@ -834,6 +876,7 @@ async def sync_account_task(
         wait_timeout=settings.twscrape_wait_timeout_seconds,
         wait_interval=settings.twscrape_wait_interval_seconds,
         recover_stale_locks=True,
+        repository=repository,
     )
     service = ArchiveSyncService(
         repository,
@@ -853,7 +896,10 @@ async def sync_account_task(
             lock_key,
             task_id,
         )
-        if result.status != "success":
+        post_fetch_queued, post_fetch_duplicates = await _enqueue_account_post_fetches(
+            repository, x_user_id, lock_key, task_id
+        )
+        if result.status not in {"success", "partial"}:
             raise RuntimeError(result.error or "account synchronization failed")
     except BaseException:
         if _is_final_attempt(context):
@@ -867,7 +913,46 @@ async def sync_account_task(
         "full_scan": full_scan,
         "media_queued": media_queued,
         "media_duplicates": media_duplicates,
+        "post_fetch_queued": post_fetch_queued,
+        "post_fetch_duplicates": post_fetch_duplicates,
     }
+
+
+@broker.task(task_name="archivex.fetch_post_detail", queue_name=settings.task_crawl_queue_name,
+             retry_on_error=True, max_retries=settings.task_retry_count,
+             delay=settings.task_retry_delay_seconds)
+async def fetch_post_detail_task(x_user_id: str, tweet_id: str,
+                                 context: Context = TaskiqDepends()) -> dict:
+    task_id = context.message.task_id
+    key = _post_fetch_lock_key(x_user_id, tweet_id)
+    if not await _claim_execution(key, task_id):
+        return {"status": "skipped", "reason": "duplicate", "tweet_id": tweet_id}
+    repository = None
+    try:
+        repository = _repository()
+        source = TwscrapePostSource(settings.twscrape_session_path,
+                                   wait_timeout=settings.twscrape_wait_timeout_seconds,
+                                   wait_interval=settings.twscrape_wait_interval_seconds,
+                                   recover_stale_locks=True, repository=repository)
+        service = ArchiveSyncService(repository, source, settings.archive_initial_post_limit,
+                                    settings.archive_incremental_known_post_limit,
+                                    media_enabled=settings.archive_media_enabled)
+        async with asyncio.timeout(settings.task_sync_timeout_seconds):
+            result = await service.recover_post(x_user_id, tweet_id)
+        media_queued = media_duplicates = 0
+        if result["status"] == "success":
+            media_queued, media_duplicates = await _enqueue_account_media(x_user_id, key, task_id)
+    except BaseException:
+        if _is_final_attempt(context):
+            if repository is not None:
+                try:
+                    repository.exhaust_post_fetch(x_user_id, tweet_id)
+                except Exception:
+                    logger.exception("Could not stop exhausted recovery for tweet %s", tweet_id)
+            await _release_lock(key, task_id)
+        raise
+    await _release_lock(key, task_id)
+    return {**result, "media_queued": media_queued, "media_duplicates": media_duplicates}
 
 
 @broker.task(

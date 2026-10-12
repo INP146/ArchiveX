@@ -10,7 +10,7 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, TYPE_CHECKING
 
 try:
     import fcntl
@@ -21,7 +21,7 @@ import twscrape.api as _twscrape_api
 from twscrape import API
 from twscrape.accounts_pool import NoAccountError
 from twscrape.db import execute as execute_twscrape_query
-from twscrape.models import Tweet, parse_tweets
+from twscrape.models import Tweet, parse_tweet, parse_tweets
 from twscrape.queue_client import Ctx as _TwscrapeContext
 from twscrape.queue_client import GqlFeaturesOutdatedError
 from twscrape.queue_client import QueueClient as _TwscrapeQueueClient
@@ -35,6 +35,8 @@ from archivex.post_model import (
 )
 
 logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from archivex.storage import ArchiveRepository
 
 
 class AccountPoolUnavailableError(RuntimeError):
@@ -52,6 +54,10 @@ class AccountPoolUnavailableError(RuntimeError):
 
 class TwscrapeResponseError(RuntimeError):
     """A recoverable twscrape response error that must not kill the worker."""
+
+
+class PostUnavailableError(RuntimeError):
+    """The focal tweet response explicitly reports unavailable content."""
 
 
 class _SafeTwscrapeQueueClient(_TwscrapeQueueClient):
@@ -476,6 +482,8 @@ class PostSource(Protocol):
 
     def fetch_timeline(self, x_user_id: str) -> AsyncIterator[SourcePost]: ...
 
+    async def fetch_post(self, tweet_id: str) -> SourcePost: ...
+
 
 class TwscrapePostSource:
     """Adapter around twscrape so archive logic is independent of its data model."""
@@ -486,10 +494,12 @@ class TwscrapePostSource:
         wait_timeout: float = 0.5,
         wait_interval: float = 0.25,
         recover_stale_locks: bool = False,
+        repository: ArchiveRepository | None = None,
     ) -> None:
         database_path = session_database_path(session_path)
         _install_twscrape_safety_patch()
         self.database_path = database_path
+        self.repository = repository
         self._recover_stale_locks = recover_stale_locks
         if recover_stale_locks:
             lease_targets = _acquire_session_lease(database_path)
@@ -572,33 +582,81 @@ class TwscrapePostSource:
     async def fetch_timeline(self, x_user_id: str) -> AsyncIterator[SourcePost]:
         await self._ensure_ready()
         seen: set[str] = set()
+        detail_deferred = False
         try:
             timeline = self.api.user_tweets_and_replies_raw(int(x_user_id))
             async with aclosing(timeline):
                 async for response in timeline:
                     payload = response.json()
                     tweets = {str(tweet.id): tweet for tweet in parse_tweets(payload)}
-                    recovered = {}
-                    for tweet_id in _conversation_tweet_ids(payload):
-                        if tweet_id in tweets or tweet_id in recovered or tweet_id in seen:
+                    recovered: dict[str, SourcePost] = {}
+                    repository = getattr(self, "repository", None)
+                    missing = list(dict.fromkeys(
+                        identifier for identifier in _conversation_tweet_ids(payload)
+                        if identifier not in tweets and identifier not in seen
+                    ))
+                    # Persist all discovered gaps before any detail request. A
+                    # crash, rate limit or early stop must not lose later IDs.
+                    if repository is not None:
+                        for tweet_id in missing:
+                            cached = repository.cached_post_snapshot(tweet_id)
+                            if cached is not None:
+                                recovered[tweet_id] = cached
+                                if cached.x_user_id == x_user_id and not repository.has_post_observation(x_user_id, tweet_id):
+                                    repository.register_post_fetch(x_user_id, tweet_id)
+                            else:
+                                repository.register_post_fetch(x_user_id, tweet_id)
+                    for tweet_id in missing:
+                        if tweet_id in recovered:
                             continue
-                        tweet = await self._fetch_conversation_tweet(tweet_id)
-                        if str(tweet.id) != tweet_id:
-                            raise TwscrapeResponseError(
-                                f"TweetDetail returned a different tweet for {tweet_id}"
-                            )
-                        recovered[tweet_id] = tweet
+                        if detail_deferred:
+                            continue
+                        if repository is not None:
+                            pending = repository.post_fetch(x_user_id, tweet_id)
+                            if pending and (pending["status"] in {"unavailable", "ignored"} or pending.get("retry_exhausted")):
+                                continue
+                            if pending and pending["last_attempt_at"] is not None:
+                                # A previously attempted gap belongs to its
+                                # independent recovery task, even on later pages.
+                                continue
+                            repository.attempt_post_fetch(x_user_id, tweet_id)
+                        try:
+                            recovered[tweet_id] = await self.fetch_post(tweet_id)
+                        except AccountPoolUnavailableError as exc:
+                            if repository is None:
+                                raise
+                            repository.finish_post_fetch(x_user_id, tweet_id, "pending", str(exc))
+                            # Endpoint locks are independent. The timeline can
+                            # still return content while TweetDetail is locked.
+                            detail_deferred = True
+                            continue
+                        except GqlFeaturesOutdatedError as exc:
+                            if repository is not None:
+                                repository.finish_post_fetch(x_user_id, tweet_id, "pending", str(exc))
+                            raise
+                        except Exception as exc:
+                            if repository is None:
+                                raise
+                            status = "unavailable" if isinstance(exc, PostUnavailableError) else "pending"
+                            repository.finish_post_fetch(x_user_id, tweet_id, status, str(exc) or type(exc).__name__)
+                            logger.warning("Conversation tweet %s recorded as %s", tweet_id, status)
+                            continue
 
                     # Complete collapsed conversations before yielding the visible
                     # items: the sync service can stop on consecutive known posts.
-                    for tweet in (*recovered.values(), *tweets.values()):
-                        tweet_id = str(tweet.id)
+                    recovered_posts = list(recovered.values())
+                    if repository is not None:
+                        recovered_posts.sort(key=lambda p: repository.has_post_observation(x_user_id, p.tweet_id))
+                    for post in (*recovered_posts, *(_source_post_from_tweet(t) for t in tweets.values())):
+                        tweet_id = post.tweet_id
                         if tweet_id in seen:
                             continue
                         seen.add(tweet_id)
                         # Conversation payloads can include other authors.
-                        if str(tweet.user.id) == x_user_id:
-                            yield _source_post_from_tweet(tweet)
+                        if post.x_user_id == x_user_id:
+                            yield post
+                        elif repository is not None:
+                            repository.finish_post_fetch(x_user_id, tweet_id, "ignored")
         except NoAccountError as exc:
             retry_after = await _pool_retry_after(
                 self.api.pool,
@@ -608,19 +666,93 @@ class TwscrapePostSource:
         except GqlFeaturesOutdatedError as exc:
             raise TwscrapeResponseError(str(exc)) from exc
 
-    async def _fetch_conversation_tweet(self, tweet_id: str) -> Tweet:
+    async def fetch_post(self, tweet_id: str) -> SourcePost:
+        await self._ensure_ready()
+        repository = getattr(self, "repository", None)
+        if repository is not None:
+            cached = repository.cached_post_snapshot(tweet_id)
+            if cached is not None:
+                return cached
         try:
-            tweet = await self.api.tweet_details(int(tweet_id))
+            response = await self.api.tweet_details_raw(int(tweet_id))
         except NoAccountError as exc:
             retry_after = await _pool_retry_after(self.api.pool, "TweetDetail")
             raise _pool_unavailable_error("TweetDetail", retry_after) from exc
+        payload = response.json() if response is not None else None
+        tweet = parse_tweet(payload, int(tweet_id)) if isinstance(payload, dict) else None
         if tweet is None:
+            if _focal_tweet_unavailable(payload, tweet_id):
+                raise PostUnavailableError(f"Tweet {tweet_id} is explicitly unavailable")
             # None can also mean an incomplete response or parsing failure;
             # it is insufficient evidence that a timeline-listed tweet was deleted.
             raise TwscrapeResponseError(
                 f"Could not read conversation tweet {tweet_id} from TweetDetail"
             )
-        return tweet
+        if str(tweet.id) != tweet_id:
+            raise TwscrapeResponseError(f"TweetDetail returned a different tweet for {tweet_id}")
+        return _source_post_from_tweet(tweet)
+
+
+def _focal_tweet_unavailable(payload: Any, tweet_id: str) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    def contains_focal_tweet(value: Any) -> bool:
+        if isinstance(value, dict):
+            if value.get("__typename") == "Tweet" and value.get("rest_id") == tweet_id:
+                return True
+            return any(contains_focal_tweet(child) for child in value.values())
+        if isinstance(value, list):
+            return any(contains_focal_tweet(child) for child in value)
+        return False
+
+    # Aggregated conversation errors may concern another reply. A present
+    # focal Tweet that failed parsing must stay retryable.
+    if contains_focal_tweet(payload):
+        return False
+    if any(isinstance(error, dict) and (error.get("code") == 144 or
+           "_Missing: No status found with that ID" in str(error.get("message", "")))
+           for error in payload.get("errors", []) or []):
+        return True
+
+    def walk(value: Any, focal: bool = False) -> bool:
+        if isinstance(value, dict):
+            focal = focal or value.get("entryId") == f"tweet-{tweet_id}" or value.get("rest_id") == tweet_id
+            if focal and value.get("__typename") in {"TweetTombstone", "TweetUnavailable"}:
+                return True
+            return any(walk(child, focal) for child in value.values())
+        if isinstance(value, list):
+            return any(walk(child, focal) for child in value)
+        return False
+
+    if walk(payload):
+        return True
+    # X also represents an unavailable focal tweet with an empty result in a
+    # complete, terminated conversation, rather than a tombstone or error 144.
+    data = payload.get("data")
+    timeline = data.get("threaded_conversation_with_injections_v2") if isinstance(data, dict) else None
+    if payload.get("errors") or not isinstance(timeline, dict):
+        return False
+    instructions = timeline.get("instructions")
+    if not isinstance(instructions, list):
+        return False
+    terminated = {item.get("direction") for item in instructions
+                  if isinstance(item, dict) and item.get("type") == "TimelineTerminateTimeline"}
+    if not {"Top", "Bottom"}.issubset(terminated):
+        return False
+    for instruction in instructions:
+        if not isinstance(instruction, dict):
+            continue
+        for entry in instruction.get("entries", []) or []:
+            if not isinstance(entry, dict) or entry.get("entryId") != f"tweet-{tweet_id}":
+                continue
+            content = (entry.get("content") or {}).get("itemContent")
+            if not isinstance(content, dict) or content.get("itemType") != "TimelineTweet":
+                continue
+            results = content.get("tweet_results")
+            if results == {} or (isinstance(results, dict) and "result" in results and results["result"] is None):
+                return True
+    return False
 
 
 def _conversation_tweet_ids(payload: Any) -> Iterable[str]:
@@ -633,6 +765,7 @@ def _conversation_tweet_ids(payload: Any) -> Iterable[str]:
                 for identifier in identifiers:
                     if (
                         isinstance(identifier, str)
+                        and len(identifier) <= 32
                         and identifier.isascii()
                         and identifier.isdecimal()
                         and int(identifier) > 0

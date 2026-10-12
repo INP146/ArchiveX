@@ -44,12 +44,17 @@ const STATUS_META: Record<string, { label: string; className: string }> = {
   queued: { label: "等待中", className: "is-queued" },
   retry_scheduled: { label: "等待重试", className: "is-retrying" },
   abandoned: { label: "已中断", className: "is-abandoned" },
+  partial: { label: "部分完成", className: "is-retrying" },
+  unavailable: { label: "不可访问", className: "is-abandoned" },
+  ignored: { label: "无需补档", className: "is-completed" },
+  exhausted: { label: "重试已停止", className: "is-abandoned" },
   unknown: { label: "未知", className: "is-abandoned" }
 };
 
 const TASK_NAMES: Record<string, string> = {
   "archivex.sync_account": "账号同步",
   "archivex.download_media": "媒体下载",
+  "archivex.fetch_post_detail": "帖子补档",
   "archivex.schedule_enabled_accounts": "定时同步分发"
 };
 
@@ -368,11 +373,11 @@ function terminalTaskCount(counts: { all: number; in_progress: number; queued: n
 }
 
 function TaskRow({ task }: { task: TaskRecord }) {
-  const status = STATUS_META[task.status] ?? STATUS_META.unknown;
+  const status = STATUS_META[taskDisplayStatus(task)] ?? STATUS_META.unknown;
   return (
     <Link to="/tasks/$taskId" params={{ taskId: task.id }} className="x-task-row">
       <span className="x-task-name"><strong>{taskLabel(task)}</strong><small>{taskSummary(task)}</small></span>
-      <span><StatusBadge taskStatus={task.status} /></span>
+      <span><StatusBadge taskStatus={taskDisplayStatus(task)} /></span>
       <span className="x-task-queue">{queueLabel(task.worker)}</span>
       <span className="x-task-duration">{formatDuration(task.duration_ms)}</span>
       <time dateTime={task.started_at ?? task.queued_at ?? undefined}>{formatDate(task.started_at ?? task.queued_at)}</time>
@@ -387,7 +392,7 @@ function TaskDetail({ task }: { task: TaskRecord }) {
       <section className="x-task-detail-lead">
         <span className="x-task-detail-icon"><FiServer /></span>
         <div><h2>{taskLabel(task)}</h2><code>{task.name}</code></div>
-        <StatusBadge taskStatus={task.status} />
+        <StatusBadge taskStatus={taskDisplayStatus(task)} />
       </section>
       <TaskSubject task={task} />
       <dl className="x-task-facts">
@@ -395,10 +400,10 @@ function TaskDetail({ task }: { task: TaskRecord }) {
         <div><dt>执行队列</dt><dd>{queueLabel(task.worker)}</dd></div>
         <div><dt>当前尝试</dt><dd>{task.current_attempt} / {task.max_attempts}</dd></div>
         {task.trigger && <div><dt>触发方式</dt><dd>{triggerLabel(task.trigger)}</dd></div>}
-        {task.parent_task_id && <div><dt>所属同步任务</dt><dd><Link to="/tasks/$taskId" params={{ taskId: task.parent_task_id }}><code>{task.parent_task_id}</code></Link></dd></div>}
+        {task.parent_task_id && <div><dt>上级任务</dt><dd><Link to="/tasks/$taskId" params={{ taskId: task.parent_task_id }}><code>{task.parent_task_id}</code></Link></dd></div>}
         {task.retry_of && <div><dt>重试来源</dt><dd><Link to="/tasks/$taskId" params={{ taskId: task.retry_of }}><code>{task.retry_of}</code></Link></dd></div>}
         {task.child_counts && task.child_counts.all > 0 && (
-          <div><dt>派生媒体任务</dt><dd>{childCountSummary(task.child_counts)}</dd></div>
+          <div><dt>派生任务</dt><dd>{childCountSummary(task.child_counts)}</dd></div>
         )}
         <div><dt>进入队列</dt><dd>{formatDate(task.queued_at, true)}</dd></div>
         <div><dt>开始时间</dt><dd>{formatDate(task.started_at, true)}</dd></div>
@@ -438,7 +443,7 @@ function TaskSubject({ task }: { task: TaskRecord }) {
     <section className="x-task-subject">
       <span className="x-task-subject-icon">{media ? <FiImage /> : <FiUser />}</span>
       <div className="x-task-subject-main">
-        <span>{media ? mediaTypeLabel(media.media_type) : "同步账号"}</span>
+        <span>{media ? mediaTypeLabel(media.media_type) : task.name === "archivex.fetch_post_detail" ? "补查帖子" : "同步账号"}</span>
         {account && (
           <Link to="/accounts/$xUserId" params={{ xUserId: account.x_user_id }}>
             <strong>{account.display_name || account.username || account.x_user_id}</strong>
@@ -461,7 +466,7 @@ function TaskSubject({ task }: { task: TaskRecord }) {
         )}
         {task.parent_task_id && (
           <Link to="/tasks/$taskId" params={{ taskId: task.parent_task_id }}>
-            <FiGitBranch /><span>同步任务</span>
+            <FiGitBranch /><span>上级任务</span>
           </Link>
         )}
       </div>
@@ -492,6 +497,13 @@ function taskLabel(task: TaskRecord) {
   if (task.name === "archivex.sync_account" && (task.labels.full_scan === true || task.kwargs.full_scan === true)) return "账号全量扫描";
   return TASK_NAMES[task.name] ?? task.name;
 }
+function taskDisplayStatus(task: TaskRecord) {
+  if (task.status === "completed" && task.result && typeof task.result === "object") {
+    const status = (task.result as Record<string, unknown>).status;
+    if (status === "partial" || status === "unavailable" || status === "ignored" || status === "exhausted") return status;
+  }
+  return task.status;
+}
 function taskSummary(task: TaskRecord) {
   const { account, media, post, post_author: author } = task.context;
   const accountLabel = account?.username ? `@${account.username}` : account?.display_name || account?.x_user_id;
@@ -500,6 +512,7 @@ function taskSummary(task: TaskRecord) {
       .filter(Boolean)
       .join(" · ");
   }
+  if (task.name === "archivex.fetch_post_detail") return [accountLabel, post ? `帖子 ${post.tweet_id}` : null].filter(Boolean).join(" · ");
   if (accountLabel) return [accountLabel, account?.x_user_id].filter((value, index, values) => value && values.indexOf(value) === index).join(" · ");
   if (task.name === "archivex.schedule_enabled_accounts") return scheduleResultSummary(task.result) ?? shortId(task.id);
   return shortId(task.id);
@@ -524,6 +537,7 @@ function triggerLabel(trigger: string) {
   const labels: Record<string, string> = {
     manual: "手动同步",
     manual_full_scan: "手动全量扫描",
+    post_recovery: "帖子补档",
     account_added: "新增账号",
     scheduled: "定时同步",
     schedule_manual: "手动运行计划",
@@ -539,7 +553,7 @@ function childCountSummary(counts: { all: number; completed: number; failure: nu
     .join(" · ");
 }
 function canRerunTask(task: TaskRecord) {
-  const rerunnable = task.name === "archivex.sync_account" || task.name === "archivex.download_media";
+  const rerunnable = task.name === "archivex.sync_account" || task.name === "archivex.download_media" || task.name === "archivex.fetch_post_detail";
   return rerunnable && !["queued", "in_progress", "retry_scheduled"].includes(task.status);
 }
 function shortId(id: string) { return id.split("-")[0]; }

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BsPatchCheckFill } from "react-icons/bs";
 import {
   FiArrowLeft,
@@ -16,6 +16,8 @@ import {
 import {
   getAccount,
   getUsernameHistory,
+  getPostFetches,
+  retryPostFetches,
   setAccountEnabled,
   syncAccount
 } from "../../lib/api/accounts";
@@ -42,6 +44,26 @@ export function AccountPage() {
   const history = useQuery({
     queryKey: ["username-history", xUserId],
     queryFn: () => getUsernameHistory(xUserId)
+  });
+  const postFetches = useQuery({
+    queryKey: ["post-fetches", xUserId],
+    queryFn: () => getPostFetches(xUserId),
+    refetchInterval: (query) => query.state.data?.pending ? 5_000 : false
+  });
+  const previousGaps = useRef<{ account: string; count: number } | null>(null);
+  useEffect(() => {
+    if (!postFetches.data) return;
+    const count = postFetches.data.pending + postFetches.data.unavailable + (postFetches.data.failed ?? 0);
+    if (previousGaps.current?.account === xUserId && count < previousGaps.current.count) {
+      void queryClient.invalidateQueries({ queryKey: ["posts", xUserId] });
+      void queryClient.invalidateQueries({ queryKey: ["account", xUserId] });
+      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
+    }
+    previousGaps.current = { account: xUserId, count };
+  }, [postFetches.data, xUserId, queryClient]);
+  const retryPosts = useMutation({
+    mutationFn: () => retryPostFetches(xUserId),
+    onSuccess: async () => { await queryClient.invalidateQueries(); }
   });
   const toggleArchive = useMutation({
     mutationFn: (enabled: boolean) => setAccountEnabled(xUserId, enabled),
@@ -189,6 +211,34 @@ export function AccountPage() {
           {" · "}
           <Link to="/tasks/$taskId" params={{ taskId: fullScan.data.task_id }}>查看任务</Link>
         </p>
+      )}
+      {postFetches.error && <p className="x-profile-action-error">待补档状态读取失败：{postFetches.error.message}</p>}
+      {postFetches.data && (postFetches.data.pending > 0 || postFetches.data.unavailable > 0 || (postFetches.data.failed ?? 0) > 0) && (
+        <details className="x-post-recovery" key={postFetches.data.pending > 0 ? "pending" : "history"}
+          open={postFetches.data.pending > 0} aria-label="帖子补档状态">
+          <summary>{postFetches.data.pending > 0
+            ? `${postFetches.data.pending} 条帖子待补`
+            : ["补档历史", postFetches.data.unavailable ? `${postFetches.data.unavailable} 条不可访问` : null,
+              postFetches.data.failed ? `${postFetches.data.failed} 条重试已停止` : null].filter(Boolean).join(" · ")}</summary>
+          <p>不可访问和重试耗尽的记录已退出自动补档，不影响其他帖子归档。需要时可以手动重新检查。</p>
+          <button className="x-full-scan-button" type="button" disabled={retryPosts.isPending}
+            onClick={() => retryPosts.mutate()}>{retryPosts.isPending ? "提交中" : "重试待补及不可访问帖子"}</button>
+          {retryPosts.error && <p className="x-profile-action-error">{retryPosts.error.message}</p>}
+          {retryPosts.data && <p role="status">已处理 {retryPosts.data.queued} 条补档请求
+            {retryPosts.data.duplicates > 0 && `，${retryPosts.data.duplicates} 条已有任务`}
+            {retryPosts.data.failed > 0 && `，${retryPosts.data.failed} 条提交或执行失败`}</p>}
+          <details>
+            <summary>查看明细（前 {postFetches.data.items.length} 条）</summary>
+            <ul>{postFetches.data.items.map((item) => (
+              <li key={item.tweet_id}>
+                <a href={`https://x.com/i/status/${item.tweet_id}`} target="_blank" rel="noreferrer">{item.tweet_id}</a>
+                {" · "}{item.status === "unavailable" ? "不可访问" : item.retry_exhausted ? "重试已停止" : "待补"}{" · "}已尝试 {item.attempt_count} 次
+                {item.last_error && <span>{item.last_error}</span>}
+              </li>
+            ))}</ul>
+          </details>
+          <Link to="/tasks">查看补档任务</Link>
+        </details>
       )}
       <nav className="x-tabs" aria-label="账号内容">
         <TabButton active={activeTab === "posts"} onClick={() => selectTab("posts")}>帖子</TabButton>

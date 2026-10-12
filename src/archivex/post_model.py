@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Mapping
+from math import isfinite
 
 # A non-X identity for references whose payload contains no author ID. Never
 # invent a numeric X ID; a later complete snapshot replaces this association.
@@ -85,18 +86,29 @@ def media_from_payload(payload: Mapping[str, Any]) -> tuple[SourceMedia, ...]:
         variants = [
             v
             for v in video.get("variants") or ()
-            if isinstance(v, Mapping) and isinstance(v.get("url"), str) and v["url"]
+            if isinstance(v, Mapping) and isinstance(v.get("url"), str) and v["url"].strip()
         ]
         if variants:
             best = max(
                 variants,
-                key=lambda v: v["bitrate"] if v.get("bitrate") is not None else -1,
+                key=_video_bitrate,
             )
-            append("video", best["url"])
+            append("video", best["url"].strip())
     for animated in media.get("animated") or ():
         if isinstance(animated, Mapping):
             append("gif", animated.get("videoUrl"))
     return tuple(items.values())
+
+
+def _video_bitrate(variant: Mapping[str, Any]) -> int | float:
+    value = variant.get("bitrate")
+    if isinstance(value, bool):
+        return -1
+    if isinstance(value, int) and value >= 0:
+        return value
+    if isinstance(value, float) and isfinite(value) and value >= 0:
+        return value
+    return -1
 
 
 def parse_post(

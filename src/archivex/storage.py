@@ -18,10 +18,26 @@ from archivex.post_model import (
     UNKNOWN_USER_ID,
     UserSnapshot,
     user_from_payload,
+    parse_post,
 )
 from archivex.task_center import TASK_SCHEMA
 
 SCHEMA_VERSION = 3
+POST_FETCH_SCHEMA = """
+CREATE TABLE IF NOT EXISTS archive_post_fetches (
+    observed_account_x_user_id TEXT NOT NULL REFERENCES observed_accounts(x_user_id) ON DELETE CASCADE,
+    tweet_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','completed','unavailable','ignored')),
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    last_attempt_at TEXT,
+    retry_exhausted INTEGER NOT NULL DEFAULT 0 CHECK (retry_exhausted IN (0,1)),
+    PRIMARY KEY (observed_account_x_user_id,tweet_id)
+);
+CREATE INDEX IF NOT EXISTS idx_post_fetch_status ON archive_post_fetches(status,observed_account_x_user_id);
+"""
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS x_users (
     x_user_id TEXT PRIMARY KEY,
@@ -336,14 +352,135 @@ def initialize_storage(database_path: Path, archive_data_dir: Path, session_path
             )
         if version == 0 and tables - {"queue_tasks", "queue_attempts"}:
             raise RuntimeError("Unversioned archive schema; run the offline migration")
-        connection.executescript(SCHEMA + TASK_SCHEMA)
+        connection.executescript(SCHEMA + TASK_SCHEMA + POST_FETCH_SCHEMA)
+        _ensure_post_fetch_columns(connection)
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _ensure_post_fetch_columns(connection: sqlite3.Connection) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(archive_post_fetches)")}
+    if "retry_exhausted" not in columns:
+        connection.execute("ALTER TABLE archive_post_fetches ADD COLUMN retry_exhausted INTEGER NOT NULL DEFAULT 0 CHECK (retry_exhausted IN (0,1))")
+        connection.execute("""UPDATE archive_post_fetches AS f SET retry_exhausted=1
+            WHERE f.status='pending' AND EXISTS (SELECT 1 FROM queue_tasks t
+                WHERE t.name='archivex.fetch_post_detail'
+                AND t.observed_account_x_user_id=f.observed_account_x_user_id
+                AND json_extract(t.labels,'$._archivex_fetch_tweet_id')=f.tweet_id
+                AND t.status='failure' AND t.current_attempt>=t.max_attempts)
+            AND NOT EXISTS (SELECT 1 FROM queue_tasks t WHERE t.name='archivex.fetch_post_detail'
+                AND t.observed_account_x_user_id=f.observed_account_x_user_id
+                AND json_extract(t.labels,'$._archivex_fetch_tweet_id')=f.tweet_id
+                AND t.status IN ('queued','in_progress','retry_scheduled'))""")
 
 
 class ArchiveRepository:
     def __init__(self, database_path: Path, archive_data_dir: Path) -> None:
         self.database_path = database_path
         self.archive_data_dir = archive_data_dir
+        self._post_fetch_storage_initialized = False
+
+    def _ensure_post_fetch_storage(self) -> None:
+        if self._post_fetch_storage_initialized:
+            return
+        with _connect(self.database_path) as c:
+            if c.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+                raise RuntimeError("Post recovery requires archive schema v3")
+            c.executescript(POST_FETCH_SCHEMA)
+            _ensure_post_fetch_columns(c)
+        self._post_fetch_storage_initialized = True
+
+    def cached_post_snapshot(self, tweet_id: str) -> SourcePost | None:
+        with _connect(self.database_path) as c:
+            row = c.execute("""SELECT availability,raw_json_path,author_x_user_id,posted_at,permalink FROM posts WHERE tweet_id=?
+                UNION ALL SELECT availability,raw_json_path,reposter_x_user_id,reposted_at,permalink FROM reposts WHERE repost_tweet_id=?""",
+                (tweet_id, tweet_id)).fetchone()
+        if row is None or row["availability"] != "available" or not row["raw_json_path"]:
+            return None
+        payload = _read_payload(self.archive_data_dir / row["raw_json_path"])
+        try:
+            snapshot = parse_post(payload, tweet_id=tweet_id,
+                                  posted_at=datetime.fromisoformat(row["posted_at"]), permalink=row["permalink"])
+        except (ValueError, TypeError, KeyError, OverflowError):
+            return None
+        return snapshot if (snapshot.availability == "available" and snapshot.x_user_id != UNKNOWN_USER_ID
+                            and snapshot.x_user_id == row["author_x_user_id"]) else None
+
+    def has_post_observation(self, account_id: str, tweet_id: str) -> bool:
+        with _connect(self.database_path) as c:
+            return bool(c.execute("""SELECT EXISTS(SELECT 1 FROM archive_post_observations
+                WHERE observed_account_x_user_id=? AND tweet_id=?) OR EXISTS(
+                SELECT 1 FROM archive_repost_observations WHERE observed_account_x_user_id=? AND repost_tweet_id=?)""",
+                (account_id, tweet_id, account_id, tweet_id)).fetchone()[0])
+
+    def register_post_fetch(self, account_id: str, tweet_id: str) -> None:
+        self._ensure_post_fetch_storage()
+        now = _timestamp()
+        with _connect(self.database_path) as c:
+            c.execute("""INSERT INTO archive_post_fetches
+                (observed_account_x_user_id,tweet_id,first_seen_at,last_seen_at) VALUES (?,?,?,?)
+                ON CONFLICT(observed_account_x_user_id,tweet_id) DO UPDATE SET
+                last_seen_at=excluded.last_seen_at,
+                retry_exhausted=CASE WHEN archive_post_fetches.status='completed' THEN 0
+                    ELSE archive_post_fetches.retry_exhausted END,
+                last_attempt_at=CASE WHEN archive_post_fetches.status='completed' THEN NULL
+                    ELSE archive_post_fetches.last_attempt_at END,
+                status=CASE WHEN archive_post_fetches.status='completed' THEN 'pending'
+                    ELSE archive_post_fetches.status END""", (account_id, tweet_id, now, now))
+
+    def post_fetch(self, account_id: str, tweet_id: str) -> dict[str, Any] | None:
+        self._ensure_post_fetch_storage()
+        with _connect(self.database_path) as c:
+            row = c.execute("SELECT * FROM archive_post_fetches WHERE observed_account_x_user_id=? AND tweet_id=?",
+                            (account_id, tweet_id)).fetchone()
+        return dict(row) if row else None
+
+    def attempt_post_fetch(self, account_id: str, tweet_id: str) -> None:
+        self._ensure_post_fetch_storage()
+        with _connect(self.database_path) as c:
+            c.execute("""UPDATE archive_post_fetches SET attempt_count=attempt_count+1,last_attempt_at=?
+                WHERE observed_account_x_user_id=? AND tweet_id=?""", (_timestamp(), account_id, tweet_id))
+
+    def finish_post_fetch(self, account_id: str, tweet_id: str, status: str,
+                          error: str | None = None) -> None:
+        self._ensure_post_fetch_storage()
+        with _connect(self.database_path) as c:
+            c.execute("""UPDATE archive_post_fetches SET status=?,last_error=?,
+                retry_exhausted=CASE WHEN ?!='pending' THEN 0 ELSE retry_exhausted END
+                WHERE observed_account_x_user_id=? AND tweet_id=?""", (status, error, status, account_id, tweet_id))
+
+    def exhaust_post_fetch(self, account_id: str, tweet_id: str) -> None:
+        self._ensure_post_fetch_storage()
+        with _connect(self.database_path) as c:
+            c.execute("""UPDATE archive_post_fetches SET retry_exhausted=1
+                WHERE observed_account_x_user_id=? AND tweet_id=? AND status='pending'""", (account_id, tweet_id))
+
+    def reset_post_fetch(self, account_id: str, tweet_id: str) -> None:
+        self._ensure_post_fetch_storage()
+        with _connect(self.database_path) as c:
+            c.execute("""UPDATE archive_post_fetches SET status='pending',retry_exhausted=0
+                WHERE observed_account_x_user_id=? AND tweet_id=?""", (account_id, tweet_id))
+
+    def post_fetches(self, account_id: str, *, include_unavailable: bool = False,
+                    limit: int | None = None) -> list[dict[str, Any]]:
+        self._ensure_post_fetch_storage()
+        statuses = "('pending','unavailable')" if include_unavailable else "('pending')"
+        eligible = "" if include_unavailable else " AND retry_exhausted=0"
+        sql = f"SELECT * FROM archive_post_fetches WHERE observed_account_x_user_id=? AND status IN {statuses}{eligible} ORDER BY CASE WHEN status='pending' AND retry_exhausted=0 THEN 0 ELSE 1 END,first_seen_at,tweet_id"
+        with _connect(self.database_path) as c:
+            rows = c.execute(sql + (" LIMIT ?" if limit is not None else ""),
+                             (account_id, limit) if limit is not None else (account_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def post_fetch_counts(self, account_id: str) -> dict[str, int]:
+        self._ensure_post_fetch_storage()
+        with _connect(self.database_path) as c:
+            rows = c.execute("""SELECT CASE WHEN status='pending' AND retry_exhausted=1 THEN 'failed'
+                ELSE status END AS category,COUNT(*) AS count FROM archive_post_fetches
+                WHERE observed_account_x_user_id=? GROUP BY category""", (account_id,)).fetchall()
+        counts = {row["category"]: row["count"] for row in rows}
+        return {"pending": counts.get("pending", 0), "unavailable": counts.get("unavailable", 0),
+                "failed": counts.get("failed", 0)}
 
     def ensure_x_user(self, snapshot: UserSnapshot) -> None:
         with _connect(self.database_path) as c:
@@ -703,6 +840,7 @@ class ArchiveRepository:
         self, item: SourcePost, observed_account_x_user_id: str, *, observed_at: str | None = None
     ) -> IngestResult:
         """One transaction for content, owned media, event and observation."""
+        self._ensure_post_fetch_storage()
         if item.x_user_id != observed_account_x_user_id:
             raise ValueError(
                 f"source returned X user {item.x_user_id} while synchronizing {observed_account_x_user_id}"
@@ -823,6 +961,9 @@ class ArchiveRepository:
             else:
                 content(item, False, frozenset())
                 new = _observe(c, "post", observed_account_x_user_id, item.tweet_id, now)
+            c.execute("""UPDATE archive_post_fetches SET status='completed',last_error=NULL,retry_exhausted=0
+                WHERE observed_account_x_user_id=? AND tweet_id=?""",
+                (observed_account_x_user_id, item.tweet_id))
         return IngestResult(
             new, referenced_new, reposts_new, media_new, tuple(dict.fromkeys(content_ids))
         )
@@ -1256,7 +1397,7 @@ def _escape_like(value: str) -> str:
 def _read_payload(path: Path) -> Mapping[str, Any]:
     try:
         payload = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
 
