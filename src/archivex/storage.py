@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS x_users (
 CREATE TABLE IF NOT EXISTS observed_accounts (
     x_user_id TEXT PRIMARY KEY REFERENCES x_users(x_user_id),
     archive_enabled INTEGER NOT NULL DEFAULT 1 CHECK (archive_enabled IN (0, 1)),
+    archive_originals INTEGER NOT NULL DEFAULT 1 CHECK (archive_originals IN (0, 1)),
+    archive_replies INTEGER NOT NULL DEFAULT 1 CHECK (archive_replies IN (0, 1)),
+    archive_reposts INTEGER NOT NULL DEFAULT 1 CHECK (archive_reposts IN (0, 1)),
     status TEXT NOT NULL DEFAULT 'active',
     last_sync_at TEXT,
     last_error TEXT,
@@ -173,7 +176,8 @@ CREATE TABLE IF NOT EXISTS archive_migration_errors (
 """
 
 ACCOUNT_SELECT = """SELECT a.x_user_id, u.current_username, u.display_name,
-    a.archive_enabled, a.status, a.last_sync_at, a.last_error
+    a.archive_enabled, a.status, a.last_sync_at, a.last_error,
+    a.archive_originals, a.archive_replies, a.archive_reposts
     FROM observed_accounts a JOIN x_users u USING (x_user_id)"""
 
 # UNION occurs before filtering, ordering and offset pagination. External content
@@ -220,6 +224,17 @@ class Account:
     status: str
     last_sync_at: str | None
     last_error: str | None
+    archive_originals: bool = True
+    archive_replies: bool = True
+    archive_reposts: bool = True
+
+    def archives_post_type(self, post_type: str) -> bool:
+        return {
+            "original": self.archive_originals,
+            "quote": self.archive_originals,
+            "reply": self.archive_replies,
+            "repost": self.archive_reposts,
+        }.get(post_type, False)
 
 
 @dataclass(frozen=True)
@@ -354,7 +369,34 @@ def initialize_storage(database_path: Path, archive_data_dir: Path, session_path
             raise RuntimeError("Unversioned archive schema; run the offline migration")
         connection.executescript(SCHEMA + TASK_SCHEMA + POST_FETCH_SCHEMA)
         _ensure_post_fetch_columns(connection)
+        _ensure_account_archive_columns(connection)
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _ensure_account_archive_columns(connection: sqlite3.Connection) -> None:
+    # Additive v3 upgrade, serialized with other service startup migrations.
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(observed_accounts)")}
+    for name in ("archive_originals", "archive_replies", "archive_reposts"):
+        if name not in columns:
+            connection.execute(
+                f"ALTER TABLE observed_accounts ADD COLUMN {name} INTEGER NOT NULL DEFAULT 1 "
+                f"CHECK ({name} IN (0, 1))"
+            )
+
+
+def _reopen_ignored_fetches(connection: sqlite3.Connection, x_user_id: str,
+                           previous: sqlite3.Row | None, settings: Mapping[str, bool | None]) -> None:
+    if previous is not None and any(
+        settings.get(name) is True and not previous[name]
+        for name in ("archive_originals", "archive_replies", "archive_reposts")
+    ):
+        # Ignored IDs have no content/type stored. Re-evaluate them on recovery
+        # so collapsed conversations can be archived after enabling a type.
+        connection.execute(
+            """UPDATE archive_post_fetches SET status='pending',last_attempt_at=NULL,
+            retry_exhausted=0,last_error=NULL WHERE observed_account_x_user_id=? AND status='ignored'""",
+            (x_user_id,),
+        )
 
 
 def _ensure_post_fetch_columns(connection: sqlite3.Connection) -> None:
@@ -505,9 +547,15 @@ class ArchiveRepository:
         current_username: str | None,
         display_name: str | None = None,
         status: str = "active",
+        *,
+        archive_originals: bool | None = None,
+        archive_replies: bool | None = None,
+        archive_reposts: bool | None = None,
     ) -> Account:
         now = _timestamp()
         with _connect(self.database_path) as c:
+            c.execute("BEGIN IMMEDIATE")
+            previous = c.execute("SELECT * FROM observed_accounts WHERE x_user_id=?", (x_user_id,)).fetchone()
             _ensure_x_user(c, UserSnapshot(x_user_id, None, display_name), now)
             c.execute(
                 """INSERT INTO observed_accounts
@@ -516,6 +564,16 @@ class ArchiveRepository:
                 status=excluded.status, updated_at=excluded.updated_at""",
                 (x_user_id, status, now, now),
             )
+            for name, value in (("archive_originals", archive_originals),
+                                ("archive_replies", archive_replies),
+                                ("archive_reposts", archive_reposts)):
+                if value is not None:
+                    c.execute(f"UPDATE observed_accounts SET {name}=? WHERE x_user_id=?",
+                              (int(value), x_user_id))
+            _reopen_ignored_fetches(c, x_user_id, previous, {
+                "archive_originals": archive_originals, "archive_replies": archive_replies,
+                "archive_reposts": archive_reposts,
+            })
             if current_username:
                 _observe_username(c, x_user_id, current_username, now)
             if display_name is not None:
@@ -552,11 +610,24 @@ class ArchiveRepository:
         return [r["x_user_id"] for r in rows]
 
     def set_account_enabled(self, x_user_id: str, enabled: bool) -> Account | None:
+        return self.update_account_settings(x_user_id, archive_enabled=enabled)
+
+    def update_account_settings(self, x_user_id: str, **settings: bool) -> Account | None:
+        allowed = {"archive_enabled", "archive_originals", "archive_replies", "archive_reposts"}
+        if settings.keys() - allowed or any(type(value) is not bool for value in settings.values()):
+            raise ValueError("invalid account archive settings")
+        values: dict[str, Any] = {key: int(value) for key, value in settings.items()}
+        if "archive_enabled" in settings:
+            values["status"] = "active" if settings["archive_enabled"] else "paused"
+        values["updated_at"] = _timestamp()
         with _connect(self.database_path) as c:
+            c.execute("BEGIN IMMEDIATE")
+            previous = c.execute("SELECT * FROM observed_accounts WHERE x_user_id=?", (x_user_id,)).fetchone()
             c.execute(
-                "UPDATE observed_accounts SET archive_enabled=?,status=?,updated_at=? WHERE x_user_id=?",
-                (int(enabled), "active" if enabled else "paused", _timestamp(), x_user_id),
+                "UPDATE observed_accounts SET " + ",".join(f"{key}=?" for key in values)
+                + " WHERE x_user_id=?", (*values.values(), x_user_id),
             )
+            _reopen_ignored_fetches(c, x_user_id, previous, settings)
         return self.get_account(x_user_id)
 
     def username_history(self, x_user_id: str) -> list[dict[str, Any]]:
@@ -1342,7 +1413,8 @@ def _observe_username(c: sqlite3.Connection, x_user_id: str, username: str, now:
 
 def _account_from_row(row: sqlite3.Row) -> Account:
     values = dict(row)
-    values["archive_enabled"] = bool(values["archive_enabled"])
+    for name in ("archive_enabled", "archive_originals", "archive_replies", "archive_reposts"):
+        values[name] = bool(values[name])
     return Account(**values)
 
 

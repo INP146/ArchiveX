@@ -20,6 +20,8 @@ import {
   getUsernameHistory,
   getPostFetches,
   retryPostFetches,
+  ArchivePolicy,
+  updateAccountSettings,
   setAccountEnabled,
   syncAccount
 } from "../../lib/api/accounts";
@@ -27,6 +29,7 @@ import { ApiError } from "../../lib/api/client";
 import { AccountTimelineTab } from "../../lib/api/posts";
 import { formatCount } from "../../lib/format-number";
 import { PostTimeline } from "../timeline/post-timeline";
+import { ArchivePolicyFields } from "./archive-policy-fields";
 import "./account-page.css";
 
 export function AccountPage() {
@@ -70,6 +73,17 @@ export function AccountPage() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["account", xUserId] }),
         queryClient.invalidateQueries({ queryKey: ["accounts"] })
+      ]);
+    }
+  });
+  const archivePolicy = useMutation({
+    mutationFn: (settings: Partial<ArchivePolicy>) => updateAccountSettings(xUserId, settings),
+    onSuccess: async (updated) => {
+      queryClient.setQueryData(["account", xUserId], updated);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["account", xUserId] }),
+        queryClient.invalidateQueries({ queryKey: ["accounts"] }),
+        queryClient.invalidateQueries({ queryKey: ["post-fetches", xUserId] })
       ]);
     }
   });
@@ -188,6 +202,14 @@ export function AccountPage() {
             <Link to="/tasks" search={{ account: xUserId }}><FiServer />查看账号任务</Link>
             <a href={username ? `https://x.com/${encodeURIComponent(username)}` : `https://x.com/i/user/${xUserId}`} target="_blank" rel="noreferrer"><FiExternalLink />打开 X 主页</a>
           </nav>
+          <ArchivePolicyFields policy={profile} disabled={archivePolicy.isPending}
+            onChange={(key, enabled) => archivePolicy.mutate({ [key]: enabled })} />
+          <p className="x-archive-policy-note">
+            {archivePolicy.isPending ? "正在保存…" : "修改后自动保存，后续同步和补档按所选类型归档；已归档内容保留。"}
+            重新开启类型后，可通过全量扫描补齐历史内容。引用和回复涉及的原帖仍会作为上下文保存。
+          </p>
+          {archivePolicy.error && <p className="x-profile-action-error" role="alert">归档设置保存失败：{archivePolicy.error.message}</p>}
+          {archivePolicy.isSuccess && <p className="x-archive-policy-note" role="status">归档设置已保存</p>}
           {(sync.error || fullScan.error || toggleArchive.error) && (
             <p className="x-profile-action-error">
               {(sync.error ?? fullScan.error ?? toggleArchive.error)?.message}

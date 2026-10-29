@@ -157,6 +157,43 @@ def _settings(tmp_path) -> Settings:
     )
 
 
+def test_account_archive_policy_api_is_partial_persistent_and_authenticated(tmp_path):
+    settings = _settings(tmp_path)
+    dispatcher = FakeTaskDispatcher()
+    with TestClient(create_app(settings, FakeSource(), FakeSessionAccountManager(), dispatcher)) as client:
+        headers = {"Authorization": "Bearer test-token"}
+        body = {"x_user_id": "42", "current_username": "example", "archive_reposts": False}
+        created = client.post("/api/accounts", json=body, headers=headers)
+        assert created.status_code == 201
+        assert created.json()["archive_reposts"] is False
+        assert created.json()["archive_originals"] is True
+        assert created.json()["archive_replies"] is True
+        assert dispatcher.calls
+        assert client.patch("/api/accounts/42", json={"archive_replies": False}).status_code == 401
+        updated = client.patch("/api/accounts/42", json={"archive_replies": False}, headers=headers)
+        assert updated.status_code == 200
+        assert updated.json()["archive_enabled"] is True
+        assert updated.json()["archive_originals"] is True
+        assert updated.json()["archive_reposts"] is False
+        assert updated.json()["archive_replies"] is False
+        paused = client.patch("/api/accounts/42", json={"archive_enabled": False}, headers=headers)
+        assert paused.json()["status"] == "paused"
+        changed_paused = client.patch("/api/accounts/42", json={"archive_originals": False}, headers=headers)
+        assert changed_paused.json()["status"] == "paused"
+        assert changed_paused.json()["archive_enabled"] is False
+        assert client.get("/api/accounts", headers=headers).json()[0]["archive_reposts"] is False
+        assert client.get("/api/accounts/42", headers=headers).json()["archive_replies"] is False
+        assert client.patch("/api/accounts/42", json={"archive_reposts": None}, headers=headers).status_code == 422
+        assert client.patch("/api/accounts/42", json={"archive_reposts": "invalid"}, headers=headers).status_code == 422
+        assert client.patch("/api/accounts/99", json={"archive_reposts": False}, headers=headers).status_code == 404
+        # Older clients omit the new fields when re-enabling; keep the stored choices.
+        enabled = client.post("/api/accounts", json={"x_user_id": "42", "current_username": "example"}, headers=headers)
+        assert enabled.json()["archive_enabled"] is True
+        assert enabled.json()["archive_reposts"] is False
+    with TestClient(create_app(settings, FakeSource(), FakeSessionAccountManager(), dispatcher)) as client:
+        assert client.get("/api/accounts/42", headers=headers).json()["archive_reposts"] is False
+
+
 def test_archive_api_requires_authentication_and_returns_archived_data(tmp_path) -> None:
     settings = _settings(tmp_path)
     with TestClient(create_app(settings)) as client:
@@ -190,6 +227,7 @@ def test_archive_api_requires_authentication_and_returns_archived_data(tmp_path)
         assert accounts.json() == [{
             "x_user_id": "42", "current_username": "example", "display_name": "Example",
             "archive_enabled": True,
+            "archive_originals": True, "archive_replies": True, "archive_reposts": True,
             "status": "active", "last_sync_at": None, "last_error": None, "post_count": 1,
             "description": "Archived biography", "location": "Shanghai",
             "profile_image_url": "https://example.test/avatar_400x400.jpg",
@@ -392,6 +430,7 @@ def test_account_management_resolves_once_and_then_uses_x_user_id(tmp_path) -> N
             "description": "Bio",
             "already_archived": False,
             "archive_enabled": None,
+            "archive_originals": True, "archive_replies": True, "archive_reposts": True,
         }
 
         added = client.post(

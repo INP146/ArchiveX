@@ -36,10 +36,16 @@ class AddAccountRequest(BaseModel):
     x_user_id: str = Field(pattern=r"^[0-9]+$", max_length=32)
     current_username: str = Field(pattern=r"^[A-Za-z0-9_]{1,15}$")
     display_name: str | None = Field(default=None, max_length=100)
+    archive_originals: bool = True
+    archive_replies: bool = True
+    archive_reposts: bool = True
 
 
 class UpdateAccountRequest(BaseModel):
-    archive_enabled: bool
+    archive_enabled: bool | None = None
+    archive_originals: bool | None = None
+    archive_replies: bool | None = None
+    archive_reposts: bool | None = None
 
 
 class SyncAccountRequest(BaseModel):
@@ -157,13 +163,18 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
             "description": account.description,
             "already_archived": archived is not None,
             "archive_enabled": archived.archive_enabled if archived else None,
+            "archive_originals": archived.archive_originals if archived else True,
+            "archive_replies": archived.archive_replies if archived else True,
+            "archive_reposts": archived.archive_reposts if archived else True,
         }
 
     @router.post("/accounts", status_code=status.HTTP_201_CREATED)
     async def add_account(payload: AddAccountRequest, response: Response) -> dict[str, Any]:
         existing = repository.get_account(payload.x_user_id)
         account = repository.upsert_account(
-            payload.x_user_id, payload.current_username, payload.display_name
+            payload.x_user_id, payload.current_username, payload.display_name,
+            **payload.model_dump(include={"archive_originals", "archive_replies", "archive_reposts"},
+                                 exclude_unset=True),
         )
         try:
             submission = await task_dispatcher.enqueue_account_sync(
@@ -187,7 +198,10 @@ def create_api_router(repository: ArchiveRepository, auth_token: str, source: Po
     @router.patch("/accounts/{x_user_id}")
     def update_account(x_user_id: str, payload: UpdateAccountRequest) -> dict[str, Any]:
         _validate_x_user_id(x_user_id)
-        account = repository.set_account_enabled(x_user_id, payload.archive_enabled)
+        settings = payload.model_dump(exclude_unset=True)
+        if any(value is None for value in settings.values()):
+            raise HTTPException(status_code=422, detail="archive settings must be booleans")
+        account = repository.update_account_settings(x_user_id, **settings)
         if account is None:
             raise HTTPException(status_code=404, detail="account not found")
         return repository.get_account_details(x_user_id) or account.__dict__

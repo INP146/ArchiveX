@@ -1,0 +1,7 @@
+.x-archive-policy { min-width: 0; margin: 14px 0 0; padding: 0; border: 0; }
+.x-archive-policy legend { margin-bottom: 8px; padding: 0; color: var(--x-text); font-size: 14px; font-weight: 700; }
+.x-archive-policy-options { display: flex; flex-wrap: wrap; gap: 12px 18px; }
+.x-archive-policy label { display: inline-flex; align-items: center; gap: 6px; color: var(--x-text); cursor: pointer; font-size: 14px; }
+.x-archive-policy input { width: 16px; height: 16px; margin: 0; accent-color: var(--x-accent); }
+.x-archive-policy:disabled label { cursor: wait; opacity: .6; }
+.x-archive-policy-note { margin: 8px 0 0; color: var(--x-muted); font-size: 12px; line-height: 18px; }

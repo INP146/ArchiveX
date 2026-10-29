@@ -6,6 +6,7 @@ import { FiCheck, FiPlus, FiSearch, FiUser, FiX } from "react-icons/fi";
 
 import {
   AccountSummary,
+  ArchivePolicy,
   addAccount,
   getAccounts,
   fullScanAccounts,
@@ -14,6 +15,7 @@ import {
 } from "../../lib/api/accounts";
 import { ApiError } from "../../lib/api/client";
 import { formatCount } from "../../lib/format-number";
+import { ArchivePolicyFields } from "./archive-policy-fields";
 import "./accounts-page.css";
 
 export function AccountsPage() {
@@ -21,6 +23,9 @@ export function AccountsPage() {
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
   const [candidate, setCandidate] = useState<ResolvedAccount | null>(null);
+  const [policy, setPolicy] = useState<ArchivePolicy>({
+    archive_originals: true, archive_replies: true, archive_reposts: true
+  });
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: getAccounts });
   const fullScan = useMutation({
     mutationFn: fullScanAccounts,
@@ -28,10 +33,14 @@ export function AccountsPage() {
   });
   const resolve = useMutation({
     mutationFn: () => resolveAccount(query),
-    onSuccess: setCandidate
+    onSuccess: (resolved) => {
+      setCandidate(resolved);
+      setPolicy({ archive_originals: resolved.archive_originals,
+        archive_replies: resolved.archive_replies, archive_reposts: resolved.archive_reposts });
+    }
   });
   const add = useMutation({
-    mutationFn: addAccount,
+    mutationFn: (resolved: ResolvedAccount) => addAccount(resolved, policy),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["accounts"] });
       closeAddPanel();
@@ -123,11 +132,20 @@ export function AccountsPage() {
           </form>
           {resolve.error && <InlineError error={resolve.error} />}
           {candidate && (
-            <ResolvedAccountRow
-              account={candidate}
-              pending={add.isPending}
-              onConfirm={() => add.mutate(candidate)}
-            />
+            <>
+              <ResolvedAccountRow
+                account={candidate}
+                pending={add.isPending}
+                onConfirm={() => add.mutate(candidate)}
+              />
+              {candidate.archive_enabled !== true && (
+                <>
+                  <ArchivePolicyFields policy={policy} disabled={add.isPending}
+                    onChange={(key, enabled) => setPolicy((current) => ({ ...current, [key]: enabled }))} />
+                  <p className="x-archive-policy-note">首次同步就会按所选类型归档；转发帖会保存被转发的原帖及媒体。</p>
+                </>
+              )}
+            </>
           )}
           {add.error && <InlineError error={add.error} />}
         </section>

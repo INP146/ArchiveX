@@ -93,6 +93,7 @@ class ArchiveSyncService:
         username = account.current_username or x_user_id
         run_id = self.repository.start_sync_run(x_user_id)
         posts_seen = 0
+        posts_considered = 0
         posts_new = 0
         media_new = 0
         referenced_new = 0
@@ -103,39 +104,44 @@ class ArchiveSyncService:
         try:
             if self.media_enabled and self.media_downloader is not None:
                 await self._retry_failed_media(x_user_id)
-            async with aclosing(self.source.fetch_timeline(x_user_id)) as timeline:
-                async for post in timeline:
-                    if not full_scan and is_initial_sync and 0 <= self.initial_post_limit <= posts_seen:
-                        break
-                    if post.x_user_id != x_user_id:
-                        raise ValueError(
-                            f"source returned X user {post.x_user_id} while synchronizing {x_user_id}"
-                        )
-                    posts_seen += 1
-                    if not identity_observed:
-                        self.repository.observe_account_identity(
-                            x_user_id, post.username, post.author.display_name
-                        )
-                        identity_observed = True
-                    ingested = self.repository.ingest_item(post, x_user_id)
-                    if ingested.observation_new:
-                        posts_new += 1
-                        consecutive_known_posts = 0
-                    elif not is_initial_sync:
-                        consecutive_known_posts += 1
-                    referenced_new += ingested.referenced_new
-                    reposts_new += ingested.reposts_new
-                    media_new += ingested.media_new
-                    if self.media_enabled and self.media_downloader is not None:
-                        for owner_tweet_id in ingested.content_ids:
-                            await self._download_post_media(owner_tweet_id)
-                    if (
-                        not full_scan
-                        and not is_initial_sync
-                        and self.incremental_known_post_limit != -1
-                        and consecutive_known_posts >= self.incremental_known_post_limit
-                    ):
-                        break
+            if any((account.archive_originals, account.archive_replies, account.archive_reposts)):
+                async with aclosing(self.source.fetch_timeline(x_user_id)) as timeline:
+                    async for post in timeline:
+                        if not full_scan and is_initial_sync and 0 <= self.initial_post_limit <= posts_considered:
+                            break
+                        if post.x_user_id != x_user_id:
+                            raise ValueError(
+                                f"source returned X user {post.x_user_id} while synchronizing {x_user_id}"
+                            )
+                        posts_seen += 1
+                        if not identity_observed:
+                            self.repository.observe_account_identity(
+                                x_user_id, post.username, post.author.display_name
+                            )
+                            identity_observed = True
+                        if not account.archives_post_type(post.post_type):
+                            self.repository.finish_post_fetch(x_user_id, post.tweet_id, "ignored")
+                            continue
+                        posts_considered += 1
+                        ingested = self.repository.ingest_item(post, x_user_id)
+                        if ingested.observation_new:
+                            posts_new += 1
+                            consecutive_known_posts = 0
+                        elif not is_initial_sync:
+                            consecutive_known_posts += 1
+                        referenced_new += ingested.referenced_new
+                        reposts_new += ingested.reposts_new
+                        media_new += ingested.media_new
+                        if self.media_enabled and self.media_downloader is not None:
+                            for owner_tweet_id in ingested.content_ids:
+                                await self._download_post_media(owner_tweet_id)
+                        if (
+                            not full_scan
+                            and not is_initial_sync
+                            and self.incremental_known_post_limit != -1
+                            and consecutive_known_posts >= self.incremental_known_post_limit
+                        ):
+                            break
         except asyncio.CancelledError:
             self.repository.finish_sync_run(
                 run_id,
@@ -272,7 +278,8 @@ class ArchiveSyncService:
             self.repository.attempt_post_fetch(x_user_id, tweet_id)
         try:
             post = await self.source.fetch_post(tweet_id)
-            if post.x_user_id != x_user_id:
+            account = self.repository.get_account(x_user_id)
+            if post.x_user_id != x_user_id or account is None or not account.archives_post_type(post.post_type):
                 self.repository.finish_post_fetch(x_user_id, tweet_id, "ignored")
                 return {"status": "ignored", "tweet_id": tweet_id}
             ingested = self.repository.ingest_item(post, x_user_id)

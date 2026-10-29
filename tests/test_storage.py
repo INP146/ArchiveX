@@ -15,6 +15,27 @@ def _repository(tmp_path):
     return ArchiveRepository(database_path, archive_data_dir), database_path, archive_data_dir
 
 
+def test_archive_policy_upgrade_preserves_existing_accounts(tmp_path):
+    repository, database_path, archive_data_dir = _repository(tmp_path)
+    repository.upsert_account("42", "example", "Example")
+    repository.set_account_enabled("42", False)
+    with sqlite3.connect(database_path) as connection:
+        for column in ("archive_originals", "archive_replies", "archive_reposts"):
+            connection.execute(f"ALTER TABLE observed_accounts DROP COLUMN {column}")
+
+    initialize_storage(database_path, archive_data_dir, tmp_path / "sessions")
+    upgraded = repository.get_account("42")
+    assert upgraded.archive_enabled is False
+    assert upgraded.status == "paused"
+    assert upgraded.current_username == "example"
+    assert upgraded.archive_originals and upgraded.archive_replies and upgraded.archive_reposts
+    repository.update_account_settings("42", archive_reposts=False)
+    initialize_storage(database_path, archive_data_dir, tmp_path / "sessions")
+    assert repository.get_account("42").archive_reposts is False
+    # Re-enabling an account through older API clients keeps its policy.
+    assert repository.upsert_account("42", "example").archive_reposts is False
+
+
 def test_post_upsert_updates_data_without_duplication(tmp_path) -> None:
     repository, database_path, archive_data_dir = _repository(tmp_path)
     account = repository.upsert_account("42", "example", "Example")

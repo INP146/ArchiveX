@@ -3,6 +3,8 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 import sqlite3
+from dataclasses import replace
+from itertools import product
 
 import pytest
 
@@ -96,6 +98,101 @@ def _service(tmp_path, source, initial_post_limit=1, incremental_known_post_limi
     return ArchiveSyncService(repository, source, initial_post_limit,
                               incremental_known_post_limit, media_downloader=downloader,
                               now=lambda: datetime(2026, 8, 5, tzinfo=UTC))
+
+
+@pytest.mark.parametrize("originals,replies,reposts", list(product((False, True), repeat=3)))
+@pytest.mark.parametrize("full_scan", [False, True])
+def test_account_archive_policy_filters_types_and_media(tmp_path, originals, replies, reposts, full_scan):
+    account = SourceAccount("1", "first", "First")
+    date = datetime(2026, 8, 5, tzinfo=UTC)
+    origin = replace(_post("90", date), x_user_id="9", username="other",
+                     own_media=(SourceMedia("image", "https://example.test/reposted.jpg"),))
+    posts = [
+        _post("10", date),
+        replace(_post("11", date), post_type="reply"),
+        replace(_post("12", date), post_type="quote"),
+        replace(_post("13", date), post_type="repost", referenced=origin),
+    ]
+    downloader = FakeDownloader()
+    source = FakeSource({"first": account}, {"1": posts})
+    service = _service(tmp_path, source, initial_post_limit=-1, downloader=downloader)
+    service.repository.update_account_settings("1", archive_originals=originals,
+        archive_replies=replies, archive_reposts=reposts)
+
+    result = asyncio.run(service.sync_account("1", full_scan=full_scan))
+
+    expected = ({"10", "12"} if originals else set()) | ({"11"} if replies else set()) | ({"13"} if reposts else set())
+    assert result.status == "success"
+    assert result.posts_new == len(expected)
+    assert {p.tweet_id for p in service.repository.list_posts(observed_account_x_user_id="1")} == expected
+    assert (service.repository.get_post("90") is not None) == reposts
+    assert len(downloader.calls) == int(reposts)
+    if not any((originals, replies, reposts)):
+        assert source.calls == []
+
+
+@pytest.mark.parametrize("post_type,field", [("quote", "archive_originals"), ("reply", "archive_replies")])
+def test_enabled_posts_keep_reference_context_when_other_types_are_disabled(tmp_path, post_type, field):
+    date = datetime(2026, 8, 5, tzinfo=UTC)
+    context = replace(_post("90", date), x_user_id="9", username="other")
+    item = replace(_post("10", date), post_type=post_type, referenced=context)
+    source = FakeSource({"first": SourceAccount("1", "first", "First")}, {"1": [item]})
+    service = _service(tmp_path, source)
+    policy = dict(archive_originals=False, archive_replies=False, archive_reposts=False)
+    policy[field] = True
+    service.repository.update_account_settings("1", **policy)
+    result = asyncio.run(service.sync_account("1"))
+    assert result.posts_new == 1
+    assert service.repository.get_post("90") is not None
+    assert [p.tweet_id for p in service.repository.list_posts(observed_account_x_user_id="1")] == ["10"]
+
+
+def test_excluded_types_do_not_consume_initial_limit_or_stop_incremental_sync(tmp_path):
+    date = datetime(2026, 8, 5, tzinfo=UTC)
+    source = FakeSource({"first": SourceAccount("1", "first", "First")}, {"1": [
+        replace(_post("4", date), post_type="reply"), _post("3", date),
+        replace(_post("2", date), post_type="reply"), _post("1", date),
+    ]})
+    service = _service(tmp_path, source)
+    service.repository.update_account_settings("1", archive_replies=False)
+    first = asyncio.run(service.sync_account("1"))
+    assert first.posts_new == 1
+    assert service.repository.get_post("3") is not None
+    # A disabled reply ahead of new content must not become a known-item stop.
+    source.posts["1"].insert(1, _post("5", date))
+    second = asyncio.run(service.sync_account("1"))
+    assert second.posts_new == 1
+    assert service.repository.get_post("5") is not None
+
+
+def test_post_recovery_respects_policy_and_can_resume_after_enabling(tmp_path):
+    post = replace(_post("10", datetime(2026, 8, 5, tzinfo=UTC)), post_type="reply")
+
+    class RecoverySource(FakeSource):
+        async def fetch_post(self, tweet_id):
+            return post
+
+    service = _service(tmp_path, RecoverySource({"first": SourceAccount("1", "first", "First")}, {}))
+    service.repository.update_account_settings("1", archive_replies=False)
+    assert asyncio.run(service.recover_post("1", "10"))["status"] == "ignored"
+    assert service.repository.get_post("10") is None
+    assert service.repository.post_fetch_counts("1")["pending"] == 0
+    service.repository.update_account_settings("1", archive_replies=True)
+    assert service.repository.post_fetch("1", "10")["status"] == "pending"
+    assert asyncio.run(service.recover_post("1", "10"))["status"] == "success"
+    assert service.repository.get_post("10") is not None
+
+
+def test_disabling_type_keeps_existing_archive_and_other_account_policy(tmp_path):
+    date = datetime(2026, 8, 5, tzinfo=UTC)
+    source = FakeSource({"first": SourceAccount("1", "first", "First"),
+                         "second": SourceAccount("2", "second", "Second")}, {"1": [_post("10", date)]})
+    service = _service(tmp_path, source)
+    asyncio.run(service.sync_account("1"))
+    service.repository.update_account_settings("1", archive_originals=False)
+    asyncio.run(service.sync_account("1", full_scan=True))
+    assert service.repository.get_post("10") is not None
+    assert service.repository.get_account("2").archive_originals is True
 
 
 def test_initial_and_incremental_sync_are_idempotent(tmp_path) -> None:

@@ -1,6 +1,12 @@
 import { apiFetch } from "./client";
 
-export interface AccountSummary {
+export interface ArchivePolicy {
+  archive_originals: boolean;
+  archive_replies: boolean;
+  archive_reposts: boolean;
+}
+
+export interface AccountSummary extends ArchivePolicy {
   x_user_id: string;
   current_username: string | null;
   display_name: string | null;
@@ -22,7 +28,7 @@ export interface Account extends AccountSummary {
   joined_at: string | null;
 }
 
-export interface ResolvedAccount {
+export interface ResolvedAccount extends ArchivePolicy {
   x_user_id: string;
   current_username: string;
   display_name: string | null;
@@ -57,23 +63,28 @@ export function resolveAccount(query: string) {
   });
 }
 
-export function addAccount(account: ResolvedAccount) {
+export function addAccount(account: ResolvedAccount, policy?: ArchivePolicy) {
   return apiFetch<Account>("/api/accounts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       x_user_id: account.x_user_id,
       current_username: account.current_username,
-      display_name: account.display_name
+      display_name: account.display_name,
+      ...policy
     })
   });
 }
 
 export function setAccountEnabled(xUserId: string, archiveEnabled: boolean) {
+  return updateAccountSettings(xUserId, { archive_enabled: archiveEnabled });
+}
+
+export function updateAccountSettings(xUserId: string, settings: Partial<ArchivePolicy> & { archive_enabled?: boolean }) {
   return apiFetch<Account>(`/api/accounts/${xUserId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ archive_enabled: archiveEnabled })
+    body: JSON.stringify(settings)
   });
 }
 
